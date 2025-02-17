@@ -11,6 +11,9 @@ import AVKit
 // MARK: - Usage
 @main
 struct MyApp: App {
+    
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -18,17 +21,18 @@ struct MyApp: App {
     }
 }
 
-import SwiftUI
-import AVKit
-
 // MARK: - 视图模型
-class PlayerViewModel: NSObject, ObservableObject {
+class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerDelegate {
     @Published var isPlaying = false
     @Published var isInPipMode = false
 
     private(set) var player: AVPlayer
     private(set) var playerLayer: AVPlayerLayer
     private(set) var pipController: AVPictureInPictureController
+    
+    @Published var playingInPictureInPicture = false
+    
+    static var shared = PlayerViewModel()
 
     override init() {
         // 初始化播放器
@@ -37,8 +41,48 @@ class PlayerViewModel: NSObject, ObservableObject {
         self.playerLayer = AVPlayerLayer(player: player)
         // 初始化画中画控制器
         self.pipController = AVPictureInPictureController(playerLayer: playerLayer)!
-//        self.pipController.delegate = self
+        super.init()
+        self.pipController.delegate = self
     }
+    
+    func pictureInPictureController(
+        _: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        print(error.localizedDescription)
+    }
+
+    func pictureInPictureControllerWillStartPictureInPicture(_: AVPictureInPictureController) {}
+
+    func pictureInPictureControllerWillStopPictureInPicture(_: AVPictureInPictureController) {
+//        player.show()
+    }
+    
+//    func pictureInPictureController(
+//        _: AVPictureInPictureController,
+//        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+//    ) {
+//        let wasPlaying = isPlaying
+//
+//        var delay = 0.0
+//
+//        if !player.currentItem.isNil, !player.musicMode {
+//            player.show()
+//        }
+//
+//        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+//            withAnimation(.linear(duration: 0.3)) {
+//                self?.player.playingInPictureInPicture = false
+//            }
+//
+//            if wasPlaying {
+//                Delay.by(1) {
+//                    self?.player.play()
+//                }
+//            }
+//            completionHandler(true)
+//        }
+//    }
 
     func play() {
         player.play()
@@ -59,15 +103,15 @@ class PlayerViewModel: NSObject, ObservableObject {
     }
 }
 
-//extension PlayerViewModel: AVPictureInPictureControllerDelegate {
-//    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-//        isInPipMode = true
-//    }
-//
-//    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-//        isInPipMode = false
-//    }
-//}
+extension PlayerViewModel {
+    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isInPipMode = true
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isInPipMode = false
+    }
+}
 
 // MARK: - 自定义播放器视图
 struct CustomPlayerView: NSViewRepresentable {
