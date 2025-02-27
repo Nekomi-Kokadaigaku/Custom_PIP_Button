@@ -5,15 +5,15 @@
 //  Created by Iris on 2025-02-16.
 //
 
-import SwiftUI
 import AVKit
+import SwiftUI
 
 // MARK: - Usage
 @main
 struct MyApp: App {
-    
+
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -21,95 +21,167 @@ struct MyApp: App {
     }
 }
 
+// MARK: - 播放器状态定义
+enum PlayerState {
+    case idle
+    case loading
+    case playing
+    case paused
+    case error(Error)
+
+    var isPlaying: Bool {
+        if case .playing = self { return true }
+        return false
+    }
+}
+
+enum PiPState {
+    case normal
+    case entering
+    case active
+    case exiting
+}
+
 // MARK: - 视图模型
 class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerDelegate {
-    @Published var isPlaying = false
-    @Published var isInPipMode = false
+    @Published private(set) var playerState: PlayerState = .idle
+    @Published private(set) var pipState: PiPState = .normal
 
-    private(set) var player: AVPlayer
-    private(set) var playerLayer: AVPlayerLayer
-    private(set) var pipController: AVPictureInPictureController
-    
-    @Published var playingInPictureInPicture = false
-    
+    @Published var player: AVPlayer!
+    @Published var playerLayer: AVPlayerLayer!
+    @Published var pipController: AVPictureInPictureController!
+
     static var shared = PlayerViewModel()
 
+    private var playerTimeObserver: Any?
+
     override init() {
-        // 初始化播放器
-        self.player = AVPlayer(url: URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!)
-        // 初始化播放器图层
-        self.playerLayer = AVPlayerLayer(player: player)
-        // 初始化画中画控制器
-        self.pipController = AVPictureInPictureController(playerLayer: playerLayer)!
         super.init()
-        self.pipController.delegate = self
+
+        // 初始化播放器
+        let url = URL(
+            string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!
+        player = AVPlayer(url: url)
+
+        setupTimeObserver()
+        setupPlayerLayer()
     }
-    
+
+    private func setupTimeObserver() {
+        let interval = CMTime(
+            seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        playerTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: interval, queue: .main
+        ) {
+            [weak self] _ in
+            self?.updatePlayingStatus()
+        }
+    }
+
+    private func setupPlayerLayer() {
+        playerLayer = AVPlayerLayer(player: player)
+        pipController = AVPictureInPictureController(playerLayer: playerLayer)
+        pipController?.delegate = self
+    }
+
+    private func updatePlayingStatus() {
+        playerState = .playing
+    }
+
+    func play() {
+        guard case .paused = playerState else { return }
+        player.play()
+        playerState = .playing
+    }
+
+    func pause() {
+        guard case .playing = playerState else { return }
+        player.pause()
+        playerState = .paused
+    }
+
+    func togglePipMode() {
+        switch pipState {
+        case .normal:
+            pipState = .entering
+            pipController.startPictureInPicture()
+        case .active:
+            pipState = .exiting
+            pipController.stopPictureInPicture()
+        default:
+            break // 正在转换状态时忽略操作
+        }
+    }
+
+    func switchVideoSource(to urlString: String) {
+        guard let url = URL(string: urlString) else {
+            playerState = .error(NSError(domain: "Invalid URL", code: -1))
+            return
+        }
+
+        playerState = .loading
+
+        if case .active = pipState {
+            pipState = .exiting
+            pipController.stopPictureInPicture()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.performVideoSourceSwitch(url: url)
+            }
+        } else {
+            performVideoSourceSwitch(url: url)
+        }
+    }
+
+    private func performVideoSourceSwitch(url: URL) {
+        // 清理旧资源
+        cleanupResources()
+
+        // 创建新的播放器和相关组件
+        player = AVPlayer(url: url)
+        setupTimeObserver()
+        setupPlayerLayer()
+
+        // 开始播放
+        player.play()
+        playerState = .playing
+    }
+
+    private func cleanupResources() {
+        if let observer = playerTimeObserver {
+            player.removeTimeObserver(observer)
+            playerTimeObserver = nil
+        }
+
+        pipController?.stopPictureInPicture()
+        pipController = nil
+
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+    }
+
+    // MARK: - PiP Delegate Methods
+    func pictureInPictureControllerDidStartPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        pipState = .active
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        pipState = .normal
+    }
+
     func pictureInPictureController(
         _: AVPictureInPictureController,
         failedToStartPictureInPictureWithError error: Error
     ) {
-        print(error.localizedDescription)
+        pipState = .normal
+        playerState = .error(error)
     }
 
-    func pictureInPictureControllerWillStartPictureInPicture(_: AVPictureInPictureController) {}
-
-    func pictureInPictureControllerWillStopPictureInPicture(_: AVPictureInPictureController) {
-//        player.show()
-    }
-    
-//    func pictureInPictureController(
-//        _: AVPictureInPictureController,
-//        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
-//    ) {
-//        let wasPlaying = isPlaying
-//
-//        var delay = 0.0
-//
-//        if !player.currentItem.isNil, !player.musicMode {
-//            player.show()
-//        }
-//
-//        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-//            withAnimation(.linear(duration: 0.3)) {
-//                self?.player.playingInPictureInPicture = false
-//            }
-//
-//            if wasPlaying {
-//                Delay.by(1) {
-//                    self?.player.play()
-//                }
-//            }
-//            completionHandler(true)
-//        }
-//    }
-
-    func play() {
-        player.play()
-        isPlaying = true
-    }
-
-    func pause() {
-        player.pause()
-        isPlaying = false
-    }
-
-    func togglePipMode() {
-        if isInPipMode {
-            pipController.stopPictureInPicture()
-        } else {
-            pipController.startPictureInPicture()
-        }
-    }
-}
-
-extension PlayerViewModel {
-    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        isInPipMode = true
-    }
-
-    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        isInPipMode = false
+    deinit {
+        cleanupResources()
     }
 }
 
@@ -125,7 +197,8 @@ struct CustomPlayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        // 更新视图
+        // 更新视图层
+        nsView.layer = viewModel.playerLayer
     }
 }
 
@@ -133,24 +206,35 @@ struct CustomPlayerView: NSViewRepresentable {
 struct ContentView: View {
     @StateObject private var viewModel = PlayerViewModel()
 
+    @State var m3u8Link: String =
+        "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
+
     var body: some View {
         VStack {
             CustomPlayerView(viewModel: viewModel)
                 .frame(width: 640, height: 360)
+
+            TextField("", text: $m3u8Link)
+
             HStack {
                 Button(action: {
-                    if viewModel.isPlaying {
+                    if viewModel.playerState.isPlaying {
                         viewModel.pause()
                     } else {
                         viewModel.play()
                     }
                 }) {
-                    Text(viewModel.isPlaying ? "暂停" : "播放")
+                    Text(viewModel.playerState.isPlaying ? "暂停" : "播放")
                 }
                 Button(action: {
                     viewModel.togglePipMode()
                 }) {
-                    Text(viewModel.isInPipMode ? "退出画中画" : "进入画中画")
+                    Text(viewModel.pipState == .active ? "退出画中画" : "进入画中画")
+                }
+                Button(action: {
+                    viewModel.switchVideoSource(to: m3u8Link)
+                }) {
+                    Text("切换视频源")
                 }
             }
             .padding()
@@ -158,188 +242,11 @@ struct ContentView: View {
     }
 }
 
-
-//// MARK: - Main Player View
-//struct ContentView: View {
-//    @StateObject private var viewModel = PlayerViewModel()
-//
-//    var body: some View {
-//        VStack {
-//            VideoPlayerView(player: viewModel.player)
-//                .frame(height: 300)
-//                .background(Color.black)
-//
-//            CustomControlsView(viewModel: viewModel)
-//        }
-//        .padding()
-//        .onAppear {
-//            viewModel.setupPIPController()
-//            viewModel.loadVideo()
-//        }
-//    }
-//}
-//
-//// MARK: - ViewModel
-//class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerDelegate {
-//    @Published var isPlaying = false
-//    @Published var progress: Double = 0
-//    @Published var isPiPActive = false
-//    @Published var isPiPAvailable = false
-//
-//    let player = AVPlayer()
-//    private var pipController: AVPictureInPictureController?
-//    private var timeObserver: Any?
-//
-//    override init() {
-//        super.init()
-//        setupTimeObserver()
-//    }
-//
-//    func loadVideo() {
-//        guard let url = URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8") else { return }
-//        let playerItem = AVPlayerItem(url: url)
-//        player.replaceCurrentItem(with: playerItem)
-//        player.play()
-//    }
-//
-//    func setupPIPController() {
-//        guard let playerLayer = (player.currentItem?.asset).flatMap({ _ in
-//            AVPlayerLayer(player: player)
-//        }) else { return }
-//
-//        pipController = AVPictureInPictureController(playerLayer: playerLayer)
-//        pipController?.delegate = self
-//        isPiPAvailable = pipController?.isPictureInPicturePossible ?? false
-////        isPiPAvailable = pipController?.isPictureInPicturePossible ?? false
-//    }
-//
-//    func togglePlayback() {
-//        if player.rate == 0 {
-//            player.play()
-//        } else {
-//            player.pause()
-//        }
-//        isPlaying = player.rate != 0
-//    }
-//
-//    func seekProgress(_ editing: Bool) {
-//        guard let duration = player.currentItem?.duration.seconds, duration > 0 else { return }
-//        let time = CMTime(seconds: duration * progress, preferredTimescale: 600)
-//        player.seek(to: time)
-//    }
-//
-//    func togglePIP() {
-//        guard let pipController = pipController else {
-//            print("no pip controller")
-//            return
-//        }
-//
-//        if pipController.isPictureInPictureActive {
-//            pipController.stopPictureInPicture()
-//        } else {
-//            pipController.startPictureInPicture()
-//        }
-//    }
-//
-//    private func setupTimeObserver() {
-//        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-//        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-//            guard let self = self else { return }
-//            self.updateProgress()
-//        }
-//    }
-//
-//    private func updateProgress() {
-//        guard let duration = player.currentItem?.duration.seconds,
-//              duration.isFinite, duration > 0 else {
-//            progress = 0
-//            return
-//        }
-//        progress = player.currentTime().seconds / duration
-//    }
-//
-//    // MARK: - PiP Delegate
-//    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
-//        isPiPActive = true
-//    }
-//
-//    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-//        isPiPActive = false
-//    }
-//
-//    func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-//        print("PiP failed to start: \(error.localizedDescription)")
-//    }
-//}
-//// MARK: - Player View (NSViewRepresentable)
-//struct VideoPlayerView: NSViewRepresentable {
-//    let player: AVPlayer
-//
-//    func makeNSView(context: Context) -> NSView {
-//        let view = PlayerNSView()
-//        view.player = player
-//        return view
-//    }
-//
-//    func updateNSView(_ nsView: NSView, context: Context) {}
-//}
-//
-//class PlayerNSView: NSView {
-//    var player: AVPlayer? {
-//        didSet {
-//            guard let layer = layer as? AVPlayerLayer else { return }
-//            layer.player = player
-//            print("Avplayer is set.")
-//        }
-//    }
-//
-//    override init(frame: CGRect) {
-//        super.init(frame: frame)
-//        setupLayer()
-//    }
-//
-//    required init?(coder: NSCoder) {
-//        super.init(coder: coder)
-//        setupLayer()
-//    }
-//
-//    private func setupLayer() {
-//        self.wantsLayer = true
-//        self.layer = AVPlayerLayer()
-//    }
-//
-//    override func layout() {
-//        super.layout()
-//        (layer as? AVPlayerLayer)?.frame = bounds
-//    }
-//}
-//
-//// MARK: - Custom Controls
-//struct CustomControlsView: View {
-//    @ObservedObject var viewModel: PlayerViewModel
-//
-//    var body: some View {
-//        HStack {
-//            Button(action: {
-//                viewModel.togglePlayback()
-//            }) {
-//                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-//                    .font(.title)
-//            }
-//
-//            Slider(value: $viewModel.progress, in: 0...1) { editing in
-//                viewModel.seekProgress(editing)
-//            }
-//            .frame(width: 200)
-//
-//            Button(action: {
-//                viewModel.togglePIP()
-//            }) {
-//                Image(systemName: viewModel.isPiPActive ? "pip.exit" : "pip.enter")
-//                    .font(.title)
-//            }
-////            .disabled(!viewModel.isPiPAvailable)
-//        }
-//        .padding()
-//    }
-//}
+extension NSTextView {
+    open override var frame: CGRect {
+        didSet {
+            backgroundColor = .clear
+            drawsBackground = true
+        }
+    }
+}
