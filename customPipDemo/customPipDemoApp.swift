@@ -206,19 +206,174 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     }
 }
 
-// MARK: - 自定义播放器视图
+// MARK: - 自定义播放器容器视图（NSView）
+// 该 view 包含播放器显示层和自定义的控制层，控制层包含播放/暂停、画中画和音量调节，且鼠标 hover 时显示，不 hover 时隐藏动画
+class PlayerContainerView: NSView {
+    var viewModel: PlayerViewModel
+    var playerLayer: AVPlayerLayer? {
+        didSet {
+            // 移除旧的 layer，并添加新的
+            oldValue?.removeFromSuperlayer()
+            if let newLayer = playerLayer {
+                self.layer?.insertSublayer(newLayer, at: 0)
+                newLayer.frame = self.bounds
+            }
+        }
+    }
+    
+    // 控制层视图
+    var controlsView: NSView!
+    var playPauseButton: NSButton!
+    var pipButton: NSButton!
+    var volumeSlider: NSSlider!
+    
+    // 跟踪区域
+    var trackingArea: NSTrackingArea?
+    
+    init(frame frameRect: NSRect, viewModel: PlayerViewModel) {
+        self.viewModel = viewModel
+        super.init(frame: frameRect)
+        self.wantsLayer = true
+        // 初始化播放器层
+        setupPlayerLayer()
+        // 初始化控制层
+        setupControls()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea {
+            removeTrackingArea(ta)
+        }
+        trackingArea = NSTrackingArea(rect: self.bounds,
+                                      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                      owner: self,
+                                      userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+    
+    override func layout() {
+        super.layout()
+        // 更新播放器 layer 的 frame
+        playerLayer?.frame = self.bounds
+        
+        // 将控制层放置在底部
+        let controlsHeight: CGFloat = 50
+        controlsView.frame = NSRect(x: 0, y: 0, width: self.bounds.width, height: controlsHeight)
+        
+        // 内部控件布局：左右居中排列
+        let buttonWidth: CGFloat = 80
+        let sliderWidth: CGFloat = 150
+        let spacing: CGFloat = 20
+        let totalWidth = buttonWidth * 2 + sliderWidth + spacing * 2
+        let startX = (controlsView.bounds.width - totalWidth) / 2
+        playPauseButton.frame = NSRect(x: startX, y: (controlsView.bounds.height - 30) / 2, width: buttonWidth, height: 30)
+        pipButton.frame = NSRect(x: startX + buttonWidth + spacing, y: (controlsView.bounds.height - 30) / 2, width: buttonWidth, height: 30)
+        volumeSlider.frame = NSRect(x: startX + buttonWidth * 2 + spacing * 2, y: (controlsView.bounds.height - 30) / 2, width: sliderWidth, height: 30)
+    }
+    
+    // 设置播放器 layer
+    func setupPlayerLayer() {
+        if self.layer == nil {
+            self.wantsLayer = true
+        }
+        self.playerLayer = viewModel.playerLayer
+    }
+    
+    // 设置控制层（播放/暂停、画中画、音量调节）
+    func setupControls() {
+        controlsView = NSView(frame: .zero)
+        controlsView.wantsLayer = true
+        controlsView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+        controlsView.alphaValue = 0.0  // 初始隐藏
+        addSubview(controlsView)
+        
+        // 播放/暂停按钮
+        playPauseButton = NSButton(title: viewModel.playerState.isPlaying ? "暂停" : "播放",
+                                   target: self,
+                                   action: #selector(togglePlayPause))
+        playPauseButton.bezelStyle = .automatic
+        controlsView.addSubview(playPauseButton)
+        
+        // 画中画按钮
+        pipButton = NSButton(title: viewModel.pipState == .active ? "退出画中画" : "进入画中画",
+                             target: self,
+                             action: #selector(togglePip))
+        pipButton.bezelStyle = .rounded
+        controlsView.addSubview(pipButton)
+        
+        // 音量滑块
+        volumeSlider = NSSlider(value: Double(viewModel.volume), minValue: 0.0, maxValue: 1.0, target: self, action: #selector(volumeChanged))
+        controlsView.addSubview(volumeSlider)
+    }
+    
+    // 鼠标进入显示控制层动画
+    override func mouseEntered(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            controlsView.animator().alphaValue = 1.0
+        }
+    }
+    
+    // 鼠标离开隐藏控制层动画
+    override func mouseExited(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            controlsView.animator().alphaValue = 0.0
+        }
+    }
+    
+    @objc func togglePlayPause() {
+        if viewModel.playerState.isPlaying {
+            viewModel.pause()
+            playPauseButton.title = "播放"
+        } else {
+            viewModel.play()
+            playPauseButton.title = "暂停"
+        }
+    }
+    
+    @objc func togglePip() {
+        viewModel.togglePipMode()
+        if viewModel.pipState == .active {
+            pipButton.title = "退出画中画"
+        } else {
+            pipButton.title = "进入画中画"
+        }
+    }
+    
+    @objc func volumeChanged() {
+        viewModel.volume = Float(volumeSlider.doubleValue)
+    }
+    
+    // 在切换视频源后更新 playerLayer
+    func updatePlayerLayer() {
+        // 移除旧的播放器 layer 并添加新的
+        playerLayer?.removeFromSuperlayer()
+        self.playerLayer = viewModel.playerLayer
+        if let playerLayer = playerLayer {
+            self.layer?.insertSublayer(playerLayer, at: 0)
+            playerLayer.frame = self.bounds
+        }
+    }
+}
+
+// MARK: - 自定义播放器视图（NSViewRepresentable包装 PlayerContainerView）
 struct CustomPlayerView: NSViewRepresentable {
     @ObservedObject var viewModel: PlayerViewModel
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.layer = viewModel.playerLayer
-        view.wantsLayer = true
-        return view
+        let containerView = PlayerContainerView(frame: .zero, viewModel: viewModel)
+        return containerView
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.layer = viewModel.playerLayer
+        guard let containerView = nsView as? PlayerContainerView else { return }
+        containerView.updatePlayerLayer()
     }
 }
 
@@ -230,40 +385,19 @@ struct ContentView: View {
 
     var body: some View {
         VStack {
+            // 使用自定义播放器视图（含播放器和控制层）
             CustomPlayerView(viewModel: viewModel)
                 .frame(width: 640, height: 360)
-
-            // 添加占位符提示用户输入视频链接
+            
+            // 输入视频 URL 与切换视频源按钮（保留在 SwiftUI 中）
             TextField("请输入视频 URL", text: $m3u8Link)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding([.leading, .trailing])
             
-            // 自定义按钮区域：播放/暂停、画中画、以及音量调节
-            HStack(spacing: 20) {
-                Button(action: {
-                    if viewModel.playerState.isPlaying {
-                        viewModel.pause()
-                    } else {
-                        viewModel.play()
-                    }
-                }) {
-                    Text(viewModel.playerState.isPlaying ? "暂停" : "播放")
-                }
-                Button(action: {
-                    viewModel.togglePipMode()
-                }) {
-                    Text(viewModel.pipState == .active ? "退出画中画" : "进入画中画")
-                }
-                VStack {
-                    Text("音量: \(Int(viewModel.volume * 100))%")
-                    Slider(value: $viewModel.volume, in: 0.0...1.0)
-                        .frame(width: 150)
-                }
-                Button(action: {
-                    viewModel.switchVideoSource(to: m3u8Link)
-                }) {
-                    Text("切换视频源")
-                }
+            Button(action: {
+                viewModel.switchVideoSource(to: m3u8Link)
+            }) {
+                Text("切换视频源")
             }
             .padding()
         }
