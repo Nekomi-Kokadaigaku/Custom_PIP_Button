@@ -15,7 +15,7 @@ enum PlayerState: Equatable {
     case playing
     case paused
     case error(Error)
-    
+
     // 自定义 Equatable 实现，忽略 error 中的具体信息
     static func ==(lhs: PlayerState, rhs: PlayerState) -> Bool {
         switch (lhs, rhs) {
@@ -47,8 +47,8 @@ enum PiPState: Equatable {
 
 // MARK: - 圆角矩形背景的显示状态
 /// - hidden: 完全隐藏
-/// - transient: 短暂显示，倒计时结束后隐藏
-/// - locked: 鼠标停留在背景区域内，锁定显示
+/// - transient: 短暂显示（自动隐藏）
+/// - locked: 鼠标停留在背景区域，锁定显示
 enum BackgroundState {
     case hidden
     case transient
@@ -63,7 +63,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     @Published var player: AVPlayer!
     @Published var playerLayer: AVPlayerLayer!
     @Published var pipController: AVPictureInPictureController!
-    
+
     /// 新增音量属性，持久化保存
     @Published var volume: Float {
         didSet {
@@ -83,7 +83,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         } else {
             volume = 1.0
         }
-        
+
         super.init()
 
         // 初始化播放器
@@ -219,10 +219,10 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
 // MARK: - 自定义播放器容器视图（NSView）
 class PlayerContainerView: NSView {
-    
+
     // 视图模型
     var viewModel: PlayerViewModel
-    
+
     // 播放器图层
     var playerLayer: AVPlayerLayer? {
         didSet {
@@ -233,60 +233,60 @@ class PlayerContainerView: NSView {
             }
         }
     }
-    
-    // 背景视图（使用 NSVisualEffectView 代替 NSView）
-    private var controlsEffectView: NSVisualEffectView!
-    
+
+    // 使用 NSVisualEffectView 替代 NSView 作为圆角背景
+    private var controlsBackgroundView: NSVisualEffectView!
+
     // 播放/暂停按钮
     private var playPauseButton: NSButton!
     // 画中画按钮
     private var pipButton: NSButton!
     // 音量滑块
     private var volumeSlider: NSSlider!
-    
+
     // 跟踪区域：播放器区域
     private var containerTrackingArea: NSTrackingArea?
     // 跟踪区域：背景区域
     private var backgroundTrackingArea: NSTrackingArea?
-    
+
     // 背景显示状态
     private var backgroundState: BackgroundState = .hidden
-    
+
     // 自动隐藏计时器
     private var autoHideTimer: Timer?
-    
-    // 自动隐藏延迟（秒）
+
+    // 自动隐藏延迟（秒），可持久化
     private var autoHideDelay: TimeInterval {
         didSet {
             UserDefaults.standard.set(autoHideDelay, forKey: "AutoHideDelayKey")
         }
     }
-    
+
     // 初始化
     init(frame frameRect: NSRect, viewModel: PlayerViewModel) {
         self.viewModel = viewModel
-        
+
         // 读取 UserDefaults 中的延迟设置，如无则默认 3 秒
         if let savedDelay = UserDefaults.standard.object(forKey: "AutoHideDelayKey") as? TimeInterval {
             self.autoHideDelay = savedDelay
         } else {
             self.autoHideDelay = 3.0
         }
-        
+
         super.init(frame: frameRect)
-        
+
         wantsLayer = true
         // 初始化播放器
         setupPlayerLayer()
-        // 初始化视觉效果背景和控件
-        setupControlsEffectView()
+        // 初始化控件背景和控件
+        setupControlsBackground()
         setupControls()
     }
-    
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     // MARK: - 设置播放器图层
     private func setupPlayerLayer() {
         if layer == nil {
@@ -294,213 +294,252 @@ class PlayerContainerView: NSView {
         }
         self.playerLayer = viewModel.playerLayer
     }
-    
-    // MARK: - 设置视觉效果背景
-    private func setupControlsEffectView() {
-        controlsEffectView = NSVisualEffectView(frame: .zero)
-        controlsEffectView.material = .hudWindow
-        controlsEffectView.blendingMode = .withinWindow
-        controlsEffectView.state = .active
-        controlsEffectView.wantsLayer = true
-        if let layer = controlsEffectView.layer {
-            layer.cornerRadius = 12.0
-            layer.masksToBounds = true
-        }
-        
-        // 初始隐藏：缩放 + 透明
-        controlsEffectView.alphaValue = 0.0
-        controlsEffectView.layer?.transform = CATransform3DMakeScale(0.1, 0.1, 1.0)
-        addSubview(controlsEffectView)
+
+    // MARK: - 设置圆角矩形背景 (NSVisualEffectView)
+    private func setupControlsBackground() {
+        controlsBackgroundView = NSVisualEffectView()
+        controlsBackgroundView.material = .hudWindow  // 可根据需要修改
+        controlsBackgroundView.blendingMode = .withinWindow
+        controlsBackgroundView.state = .active  // 使其显示毛玻璃效果
+
+        // 圆角 + 遮罩
+        controlsBackgroundView.wantsLayer = true
+        controlsBackgroundView.layer?.cornerRadius = 12.0
+        controlsBackgroundView.layer?.masksToBounds = true
+
+        // 初始隐藏（缩小 + 透明）
+        controlsBackgroundView.alphaValue = 0.0
+        controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.1, 0.1, 1.0)
+
+        addSubview(controlsBackgroundView)
     }
-    
+
     // MARK: - 设置控件
     private func setupControls() {
-        // 播放/暂停按钮（使用 SF Symbol）
+        // 播放/暂停按钮 (SF Symbol)
         playPauseButton = NSButton(title: "", target: self, action: #selector(togglePlayPause))
         playPauseButton.bezelStyle = .texturedRounded
-        
-        // 根据播放状态设置初始图标
-        let playImage = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
-        let pauseImage = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: nil)
-        playPauseButton.image = viewModel.playerState.isPlaying ? pauseImage : playImage
-        
-        controlsEffectView.addSubview(playPauseButton)
-        
-        // 画中画按钮（使用 SF Symbol）
+        playPauseButton.isBordered = false
+        updatePlayPauseButtonImage() // 设置初始图标
+        controlsBackgroundView.addSubview(playPauseButton)
+
+        // 画中画按钮 (SF Symbol)
         pipButton = NSButton(title: "", target: self, action: #selector(togglePip))
         pipButton.bezelStyle = .texturedRounded
-        
-        // 设定初始图标
-        let pipEnterImage = NSImage(systemSymbolName: "pip.enter", accessibilityDescription: nil)
-        let pipExitImage = NSImage(systemSymbolName: "pip.exit", accessibilityDescription: nil)
-        pipButton.image = (viewModel.pipState == .active) ? pipExitImage : pipEnterImage
-        
-        controlsEffectView.addSubview(pipButton)
-        
+        pipButton.isBordered = false
+        updatePipButtonImage() // 设置初始图标
+        controlsBackgroundView.addSubview(pipButton)
+
         // 音量滑块
         volumeSlider = NSSlider(value: Double(viewModel.volume),
                                 minValue: 0.0,
                                 maxValue: 1.0,
                                 target: self,
                                 action: #selector(volumeChanged))
-        controlsEffectView.addSubview(volumeSlider)
+        controlsBackgroundView.addSubview(volumeSlider)
     }
-    
+
+    // 根据播放状态设置播放/暂停图标
+    private func updatePlayPauseButtonImage() {
+        if viewModel.playerState.isPlaying {
+            // 暂停图标
+            playPauseButton.image = NSImage(systemSymbolName: "pause.fill",
+                                            accessibilityDescription: "Pause")
+        } else {
+            // 播放图标
+            playPauseButton.image = NSImage(systemSymbolName: "play.fill",
+                                            accessibilityDescription: "Play")
+        }
+    }
+
+    // 根据画中画状态设置图标
+    private func updatePipButtonImage() {
+        if viewModel.pipState == .active {
+            // 退出画中画图标
+            // 若 "pip.exit" 不可用，请换其他合适图标
+            pipButton.image = NSImage(systemSymbolName: "pip.exit",
+                                      accessibilityDescription: "Exit PiP")
+        } else {
+            // 进入画中画图标
+            pipButton.image = NSImage(systemSymbolName: "pip.enter",
+                                      accessibilityDescription: "Enter PiP")
+        }
+    }
+
     // MARK: - 布局
     override func layout() {
         super.layout()
-        
+
         // 播放器图层大小
         playerLayer?.frame = bounds
-        
-        // 效果视图大小和位置
+
+        // 背景大小和位置
         let backgroundWidth: CGFloat = 320
         let backgroundHeight: CGFloat = 70
         let backgroundX = (bounds.width - backgroundWidth) / 2
         let backgroundY: CGFloat = 20  // 距离底部 20
-        controlsEffectView.frame = NSRect(x: backgroundX, y: backgroundY,
-                                          width: backgroundWidth, height: backgroundHeight)
-        
+        controlsBackgroundView.frame = NSRect(x: backgroundX, y: backgroundY,
+                                              width: backgroundWidth, height: backgroundHeight)
+
         // 内部控件布局
-        let buttonWidth: CGFloat = 32
-        let buttonHeight: CGFloat = 32
-        let spacing: CGFloat = 20
-        
+        let buttonSize: CGFloat = 24
+        let buttonY = (backgroundHeight - buttonSize) / 2
+        var currentX: CGFloat = 20
+
         // 播放/暂停按钮位置
-        playPauseButton.frame = NSRect(x: 20,
-                                       y: (backgroundHeight - buttonHeight) / 2,
-                                       width: buttonWidth,
-                                       height: buttonHeight)
-        
+        playPauseButton.frame = NSRect(x: currentX, y: buttonY,
+                                       width: buttonSize, height: buttonSize)
+        currentX += (buttonSize + 20)
+
         // 画中画按钮位置
-        pipButton.frame = NSRect(x: playPauseButton.frame.maxX + spacing,
-                                 y: (backgroundHeight - buttonHeight) / 2,
-                                 width: buttonWidth,
-                                 height: buttonHeight)
-        
+        pipButton.frame = NSRect(x: currentX, y: buttonY,
+                                 width: buttonSize, height: buttonSize)
+        currentX += (buttonSize + 20)
+
         // 音量滑块位置
-        let sliderWidth: CGFloat = 100
-        volumeSlider.frame = NSRect(x: pipButton.frame.maxX + spacing,
-                                    y: (backgroundHeight - buttonHeight) / 2,
-                                    width: sliderWidth,
-                                    height: buttonHeight)
+        let sliderWidth: CGFloat = 120
+        volumeSlider.frame = NSRect(x: currentX, y: buttonY,
+                                    width: sliderWidth, height: buttonSize)
     }
-    
+
     // MARK: - 更新追踪区域
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        
+
         // 移除旧的追踪区域
         if let area = containerTrackingArea {
             removeTrackingArea(area)
         }
         if let area = backgroundTrackingArea {
-            controlsEffectView.removeTrackingArea(area)
+            controlsBackgroundView.removeTrackingArea(area)
         }
-        
+
         // 播放器区域追踪
         containerTrackingArea = NSTrackingArea(rect: bounds,
                                                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
                                                owner: self,
                                                userInfo: nil)
         addTrackingArea(containerTrackingArea!)
-        
+
         // 背景区域追踪
-        backgroundTrackingArea = NSTrackingArea(rect: controlsEffectView.bounds,
+        backgroundTrackingArea = NSTrackingArea(rect: controlsBackgroundView.bounds,
                                                 options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
                                                 owner: self,
                                                 userInfo: nil)
-        controlsEffectView.addTrackingArea(backgroundTrackingArea!)
+        controlsBackgroundView.addTrackingArea(backgroundTrackingArea!)
     }
-    
+
     // MARK: - 鼠标事件
     override func mouseEntered(with event: NSEvent) {
-        let locationInEffectView = convert(event.locationInWindow, to: controlsEffectView)
-        // 判断鼠标进入的区域是否在背景内
-        if controlsEffectView.bounds.contains(locationInEffectView) {
-            // 如果进入背景区域，则锁定显示
+        let locationInWindow = event.locationInWindow
+        let locationInBackground = convert(locationInWindow, to: controlsBackgroundView)
+
+        // 如果在背景区域内 -> locked
+        if controlsBackgroundView.bounds.contains(locationInBackground) {
             setBackgroundState(.locked)
         } else {
-            // 进入播放器区域，但不在背景区域
-            // 若当前为 hidden，则转为 transient
+            // 否则是在播放器区域内但不在背景区域 -> transient
+            // 仅当当前是 hidden 时需要执行显示动画
             if backgroundState == .hidden {
                 setBackgroundState(.transient)
+            } else if backgroundState == .locked {
+                // 如果原本是 locked，保持 locked 或转 transient？
+                // 这里按需求：如果原先是 locked，但鼠标离开背景进入播放器，则转 transient
+                setBackgroundState(.transient)
             }
-            // 若当前是 locked -> transient 也有可能，需要看 mouseExited 的逻辑
         }
     }
-    
+
     override func mouseExited(with event: NSEvent) {
-        let locationInSelf = convert(event.locationInWindow, from: nil)
+        let locationInWindow = event.locationInWindow
+        let locationInSelf = convert(locationInWindow, from: nil)
+
         // 若鼠标离开整个播放器
         if !bounds.contains(locationInSelf) {
             // 离开播放器区域 -> 直接隐藏
             setBackgroundState(.hidden)
             return
         }
-        
+
         // 否则说明是离开背景区域，但仍在播放器内
-        let locationInEffectView = convert(event.locationInWindow, to: controlsEffectView)
-        if !controlsEffectView.bounds.contains(locationInEffectView) {
-            // 如果原先是 locked，则改为 transient（重新开始延时）
+        let locationInBackground = convert(locationInWindow, to: controlsBackgroundView)
+        if !controlsBackgroundView.bounds.contains(locationInBackground) {
+            // 如果原先是 locked，则转为 transient
             if backgroundState == .locked {
                 setBackgroundState(.transient)
             }
         }
     }
-    
+
     // MARK: - 状态切换
-    /// 根据不同状态切换来执行动画、定时器等
     private func setBackgroundState(_ newState: BackgroundState) {
         // 先取消定时器
         autoHideTimer?.invalidate()
         autoHideTimer = nil
-        
+
         let oldState = backgroundState
         backgroundState = newState
-        
+
         switch (oldState, newState) {
+        // -> hidden
         case (_, .hidden):
-            // 动画隐藏
             animateHideBackground()
-        case (_, .transient):
-            // 动画显示，并启动自动隐藏计时器
+
+        // -> transient
+        case (.hidden, .transient):
+            // 从 hidden 到 transient，需要显示动画
             animateShowBackground()
             startAutoHideTimer()
+
+        case (.locked, .transient),
+             (.transient, .transient):
+            // 从 locked 到 transient 或在 transient 内刷新，都需要保持可见，但重置定时器
+            // 不再重复播放出现动画，以免闪动
+            startAutoHideTimer()
+
+        // -> locked
         case (_, .locked):
-            // 如果是 locked，动画显示并不再自动隐藏
-            animateShowBackground()
+            // locked 时一直可见，取消定时器并播放显示动画（若之前是 hidden）
+            if oldState == .hidden {
+                animateShowBackground()
+            } else {
+                // 如果之前是 transient/locked，已经是显示状态，不重复动画
+                // do nothing
+            }
+
+        default:
+            break
         }
     }
-    
+
     // MARK: - 动画显示背景
     private func animateShowBackground() {
+        let duration: CFTimeInterval = 0.4
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.5  // 放慢动画速度
-            controlsEffectView.animator().alphaValue = 1.0
-            let transform = CATransform3DIdentity
-            controlsEffectView.layer?.animateTransform(
-                from: controlsEffectView.layer?.transform ?? CATransform3DMakeScale(0.1, 0.1, 1.0),
-                to: transform,
-                duration: 0.5
-            )
+            context.duration = duration
+            controlsBackgroundView.animator().alphaValue = 1.0
+            // 缩放动画
+            let fromTransform = CATransform3DMakeScale(0.1, 0.1, 1.0)
+            let toTransform = CATransform3DIdentity
+            controlsBackgroundView.layer?.animateTransform(from: fromTransform,
+                                                           to: toTransform,
+                                                           duration: duration)
         }
     }
-    
+
     // MARK: - 动画隐藏背景
     private func animateHideBackground() {
+        let duration: CFTimeInterval = 0.4
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.5  // 放慢动画速度
-            controlsEffectView.animator().alphaValue = 0.0
-            let transform = CATransform3DMakeScale(0.1, 0.1, 1.0)
-            controlsEffectView.layer?.animateTransform(
-                from: controlsEffectView.layer?.transform ?? CATransform3DIdentity,
-                to: transform,
-                duration: 0.5
-            )
+            context.duration = duration
+            controlsBackgroundView.animator().alphaValue = 0.0
+            let toTransform = CATransform3DMakeScale(0.1, 0.1, 1.0)
+            controlsBackgroundView.layer?.animateTransform(from: controlsBackgroundView.layer?.transform ?? CATransform3DIdentity,
+                                                           to: toTransform,
+                                                           duration: duration)
         }
     }
-    
+
     // MARK: - 启动自动隐藏计时器
     private func startAutoHideTimer() {
         autoHideTimer = Timer.scheduledTimer(timeInterval: autoHideDelay,
@@ -509,14 +548,14 @@ class PlayerContainerView: NSView {
                                              userInfo: nil,
                                              repeats: false)
     }
-    
+
     @objc private func autoHideTimerFired() {
         // 若当前仍是 transient，则隐藏
         if backgroundState == .transient {
             setBackgroundState(.hidden)
         }
     }
-    
+
     // MARK: - 控件事件
     @objc private func togglePlayPause() {
         if viewModel.playerState.isPlaying {
@@ -524,23 +563,18 @@ class PlayerContainerView: NSView {
         } else {
             viewModel.play()
         }
-        // 更新图标
-        let playImage = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
-        let pauseImage = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: nil)
-        playPauseButton.image = viewModel.playerState.isPlaying ? pauseImage : playImage
+        updatePlayPauseButtonImage()
     }
-    
+
     @objc private func togglePip() {
         viewModel.togglePipMode()
-        let pipEnterImage = NSImage(systemSymbolName: "pip.enter", accessibilityDescription: nil)
-        let pipExitImage = NSImage(systemSymbolName: "pip.exit", accessibilityDescription: nil)
-        pipButton.image = (viewModel.pipState == .active) ? pipExitImage : pipEnterImage
+        updatePipButtonImage()
     }
-    
+
     @objc private func volumeChanged() {
         viewModel.volume = Float(volumeSlider.doubleValue)
     }
-    
+
     // 在切换视频源后更新 playerLayer
     func updatePlayerLayer() {
         playerLayer?.removeFromSuperlayer()
@@ -552,7 +586,7 @@ class PlayerContainerView: NSView {
     }
 }
 
-// MARK: - 辅助：CALayer 动画扩展
+// MARK: - CALayer 动画扩展
 extension CALayer {
     /// 为 transform 属性做一个从某个值到某个值的动画
     func animateTransform(from: CATransform3D, to: CATransform3D, duration: CFTimeInterval) {
@@ -587,7 +621,7 @@ struct CustomPlayerView: NSViewRepresentable {
 // MARK: - 内容视图（SwiftUI）
 struct ContentView: View {
     @StateObject private var viewModel = PlayerViewModel()
-    
+
     @State var m3u8Link: String = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
 
     var body: some View {
@@ -595,12 +629,12 @@ struct ContentView: View {
             // 自定义播放器视图
             CustomPlayerView(viewModel: viewModel)
                 .frame(width: 640, height: 360)
-            
+
             // 输入视频 URL 与切换视频源按钮
             TextField("请输入视频 URL", text: $m3u8Link)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding([.leading, .trailing])
-            
+
             Button(action: {
                 viewModel.switchVideoSource(to: m3u8Link)
             }) {
