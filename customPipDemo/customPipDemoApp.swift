@@ -8,26 +8,28 @@
 import AVKit
 import SwiftUI
 
-// MARK: - Usage
-@main
-struct MyApp: App {
-
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-    }
-}
-
 // MARK: - 播放器状态定义
-enum PlayerState {
+enum PlayerState: Equatable {
     case idle
     case loading
     case playing
     case paused
     case error(Error)
+    
+    // 自定义 Equatable 实现，忽略 error 中的具体信息
+    static func ==(lhs: PlayerState, rhs: PlayerState) -> Bool {
+        switch (lhs, rhs) {
+        case (.idle, .idle),
+             (.loading, .loading),
+             (.playing, .playing),
+             (.paused, .paused):
+            return true
+        case (.error, .error):
+            return true
+        default:
+            return false
+        }
+    }
 
     var isPlaying: Bool {
         if case .playing = self { return true }
@@ -35,7 +37,7 @@ enum PlayerState {
     }
 }
 
-enum PiPState {
+enum PiPState: Equatable {
     case normal
     case entering
     case active
@@ -59,8 +61,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         super.init()
 
         // 初始化播放器
-        let url = URL(
-            string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!
+        let url = URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!
         player = AVPlayer(url: url)
 
         setupTimeObserver()
@@ -68,12 +69,13 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     }
 
     private func setupTimeObserver() {
-        let interval = CMTime(
-            seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        playerTimeObserver = player.addPeriodicTimeObserver(
-            forInterval: interval, queue: .main
-        ) {
-            [weak self] _ in
+        // 避免重复添加观察者
+        if let observer = playerTimeObserver {
+            player.removeTimeObserver(observer)
+            playerTimeObserver = nil
+        }
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        playerTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
             self?.updatePlayingStatus()
         }
     }
@@ -81,21 +83,28 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     private func setupPlayerLayer() {
         playerLayer = AVPlayerLayer(player: player)
         pipController = AVPictureInPictureController(playerLayer: playerLayer)
-        pipController?.delegate = self
+        pipController.delegate = self
     }
 
     private func updatePlayingStatus() {
-        playerState = .playing
+        // 使用 AVPlayer 的 timeControlStatus 来更新状态
+        if player.timeControlStatus == .playing {
+            playerState = .playing
+        } else {
+            playerState = .paused
+        }
     }
 
     func play() {
-        guard case .paused = playerState else { return }
-        player.play()
-        playerState = .playing
+        // 允许从 idle 或 paused 状态播放
+        if playerState == .paused || playerState == .idle {
+            player.play()
+            playerState = .playing
+        }
     }
 
     func pause() {
-        guard case .playing = playerState else { return }
+        guard playerState == .playing else { return }
         player.pause()
         playerState = .paused
     }
@@ -115,7 +124,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
     func switchVideoSource(to urlString: String) {
         guard let url = URL(string: urlString) else {
-            playerState = .error(NSError(domain: "Invalid URL", code: -1))
+            playerState = .error(NSError(domain: "Invalid URL", code: -1, userInfo: [NSLocalizedDescriptionKey: "无效的 URL"]))
             return
         }
 
@@ -152,30 +161,25 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
             playerTimeObserver = nil
         }
 
-        pipController?.stopPictureInPicture()
-        pipController = nil
+        if pipController != nil {
+            pipController.stopPictureInPicture()
+            pipController = nil
+        }
 
         player.pause()
         player.replaceCurrentItem(with: nil)
     }
 
     // MARK: - PiP Delegate Methods
-    func pictureInPictureControllerDidStartPictureInPicture(
-        _ pictureInPictureController: AVPictureInPictureController
-    ) {
+    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         pipState = .active
     }
 
-    func pictureInPictureControllerDidStopPictureInPicture(
-        _ pictureInPictureController: AVPictureInPictureController
-    ) {
+    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         pipState = .normal
     }
 
-    func pictureInPictureController(
-        _: AVPictureInPictureController,
-        failedToStartPictureInPictureWithError error: Error
-    ) {
+    func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         pipState = .normal
         playerState = .error(error)
     }
@@ -197,7 +201,6 @@ struct CustomPlayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        // 更新视图层
         nsView.layer = viewModel.playerLayer
     }
 }
@@ -206,34 +209,39 @@ struct CustomPlayerView: NSViewRepresentable {
 struct ContentView: View {
     @StateObject private var viewModel = PlayerViewModel()
 
-    @State var m3u8Link: String =
-        "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
+    @State var m3u8Link: String = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
 
     var body: some View {
         VStack {
             CustomPlayerView(viewModel: viewModel)
                 .frame(width: 640, height: 360)
 
-            TextField("", text: $m3u8Link)
+            // 添加占位符提示用户输入视频链接
+            TextField("请输入视频 URL", text: $m3u8Link)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .padding([.leading, .trailing])
 
             HStack {
-                Button(action: {
+                
+                Button {
                     if viewModel.playerState.isPlaying {
                         viewModel.pause()
                     } else {
                         viewModel.play()
                     }
-                }) {
+                } label: {
                     Text(viewModel.playerState.isPlaying ? "暂停" : "播放")
                 }
-                Button(action: {
+                
+                Button {
                     viewModel.togglePipMode()
-                }) {
+                } label: {
                     Text(viewModel.pipState == .active ? "退出画中画" : "进入画中画")
                 }
-                Button(action: {
+                
+                Button {
                     viewModel.switchVideoSource(to: m3u8Link)
-                }) {
+                } label: {
                     Text("切换视频源")
                 }
             }
