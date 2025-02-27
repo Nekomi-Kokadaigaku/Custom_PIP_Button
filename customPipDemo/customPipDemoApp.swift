@@ -52,17 +52,33 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     @Published var player: AVPlayer!
     @Published var playerLayer: AVPlayerLayer!
     @Published var pipController: AVPictureInPictureController!
+    
+    // 新增音量属性，持久化保存
+    @Published var volume: Float {
+        didSet {
+            player.volume = volume
+            UserDefaults.standard.set(volume, forKey: "playerVolume")
+        }
+    }
 
     static var shared = PlayerViewModel()
 
     private var playerTimeObserver: Any?
 
     override init() {
+        // 加载保存的音量值，若不存在则默认为 1.0
+        if let savedVolume = UserDefaults.standard.object(forKey: "playerVolume") as? Float {
+            volume = savedVolume
+        } else {
+            volume = 1.0
+        }
+        
         super.init()
 
         // 初始化播放器
         let url = URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!
         player = AVPlayer(url: url)
+        player.volume = volume
 
         setupTimeObserver()
         setupPlayerLayer()
@@ -147,6 +163,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
         // 创建新的播放器和相关组件
         player = AVPlayer(url: url)
+        player.volume = volume
         setupTimeObserver()
         setupPlayerLayer()
 
@@ -220,28 +237,31 @@ struct ContentView: View {
             TextField("请输入视频 URL", text: $m3u8Link)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding([.leading, .trailing])
-
-            HStack {
-                
-                Button {
+            
+            // 自定义按钮区域：播放/暂停、画中画、以及音量调节
+            HStack(spacing: 20) {
+                Button(action: {
                     if viewModel.playerState.isPlaying {
                         viewModel.pause()
                     } else {
                         viewModel.play()
                     }
-                } label: {
+                }) {
                     Text(viewModel.playerState.isPlaying ? "暂停" : "播放")
                 }
-                
-                Button {
+                Button(action: {
                     viewModel.togglePipMode()
-                } label: {
+                }) {
                     Text(viewModel.pipState == .active ? "退出画中画" : "进入画中画")
                 }
-                
-                Button {
+                VStack {
+                    Text("音量: \(Int(viewModel.volume * 100))%")
+                    Slider(value: $viewModel.volume, in: 0.0...1.0)
+                        .frame(width: 150)
+                }
+                Button(action: {
                     viewModel.switchVideoSource(to: m3u8Link)
-                } label: {
+                }) {
                     Text("切换视频源")
                 }
             }
