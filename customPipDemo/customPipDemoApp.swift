@@ -557,14 +557,16 @@ class PlayerContainerView: NSView {
 
     // MARK: - 鼠标事件
     override func mouseEntered(with event: NSEvent) {
-        let locationInWindow = event.locationInWindow
-        let locationInBackground = convert(locationInWindow, to: controlsBackgroundView)
+        // 第一步：把 window 坐标 -> container(self) 坐标
+        let locationInSelf = convert(event.locationInWindow, from: nil)
+        // 第二步：把 container(self) 坐标 -> controlsBackgroundView 坐标
+        let locationInBackground = controlsBackgroundView.convert(locationInSelf, from: self)
 
-        // 如果在背景区域内 -> locked
+        // 若坐标在 background 的 bounds 内，则锁定
         if controlsBackgroundView.bounds.contains(locationInBackground) {
             setBackgroundState(.locked)
         } else {
-            // 否则是在播放器区域内 -> transient
+            // 否则只是进入播放器区域
             if backgroundState == .hidden {
                 setBackgroundState(.transient)
             } else if backgroundState == .locked {
@@ -574,20 +576,17 @@ class PlayerContainerView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        let locationInWindow = event.locationInWindow
-        let locationInSelf = convert(locationInWindow, from: nil)
+        let locationInSelf = convert(event.locationInWindow, from: nil)
+        let locationInBackground = controlsBackgroundView.convert(locationInSelf, from: self)
 
-        // 若鼠标离开整个播放器
+        // 如果已经离开整个播放器区域
         if !bounds.contains(locationInSelf) {
-            // 离开播放器区域 -> 直接隐藏
             setBackgroundState(.hidden)
             return
         }
 
-        // 否则说明是离开背景区域，但仍在播放器内
-        let locationInBackground = convert(locationInWindow, to: controlsBackgroundView)
+        // 否则只是离开了 background，但还在播放器
         if !controlsBackgroundView.bounds.contains(locationInBackground) {
-            // 如果原先是 locked，则转为 transient
             if backgroundState == .locked {
                 setBackgroundState(.transient)
             }
@@ -624,9 +623,6 @@ class PlayerContainerView: NSView {
             if oldState == .hidden {
                 animateShowBackground()
             }
-
-        default:
-            break
         }
     }
 
