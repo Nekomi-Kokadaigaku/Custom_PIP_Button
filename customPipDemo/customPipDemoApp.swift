@@ -303,20 +303,24 @@ class PlayerContainerView: NSView {
     // MARK: - 设置圆角矩形背景 (NSVisualEffectView)
     private func setupControlsBackground() {
         controlsBackgroundView = NSVisualEffectView()
-        controlsBackgroundView.material = .hudWindow  // 可根据需要修改
+        controlsBackgroundView.material = .hudWindow  // 设置背景材质
         controlsBackgroundView.blendingMode = .withinWindow
         controlsBackgroundView.state = .active  // 显示毛玻璃效果
 
         // 圆角 + 遮罩
         controlsBackgroundView.wantsLayer = true
-        controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius
-        controlsBackgroundView.layer?.masksToBounds = true
+        controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius // 设置圆角半径
+        controlsBackgroundView.layer?.masksToBounds = true // 确保子视图不会超出圆角边界
 
         // 初始隐藏（缩小 + 透明），此处调整缩放比例为 0.8
         controlsBackgroundView.alphaValue = 0.0
         controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.8, 0.8, 1.0)
 
-        addSubview(controlsBackgroundView)
+        // 添加边框
+        controlsBackgroundView.layer?.borderColor = NSColor.white.cgColor // 设置边框颜色
+        controlsBackgroundView.layer?.borderWidth = 1.0 // 设置边框宽度
+
+        addSubview(controlsBackgroundView) // 将背景视图添加到容器视图中
     }
 
     // MARK: - 设置控件
@@ -361,7 +365,6 @@ class PlayerContainerView: NSView {
     private func updatePipButtonImage() {
         if viewModel.pipState == .active {
             // 退出画中画图标
-            // 若 "pip.exit" 不可用，请换其他合适图标
             pipButton.image = NSImage(systemSymbolName: "pip.exit",
                                       accessibilityDescription: "Exit PiP")
         } else {
@@ -386,7 +389,16 @@ class PlayerContainerView: NSView {
         controlsBackgroundView.frame = NSRect(x: backgroundX, y: backgroundY,
                                               width: backgroundWidth, height: backgroundHeight)
 
-        // 内部控件布局，使用优化后的按钮尺寸与间距
+        // **修复核心：将 anchorPoint 设为 (0.5, 0.5)，并将 position 调整到视图中心。**
+        if let layer = controlsBackgroundView.layer {
+            layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            // position 的坐标是相对于父视图（本容器视图）的左下角原点
+            // 因此这里要将背景视图的中心 (frame.midX, frame.midY) 赋给 layer.position
+            layer.position = CGPoint(x: controlsBackgroundView.frame.midX,
+                                     y: controlsBackgroundView.frame.midY)
+        }
+
+        // 内部控件布局
         let buttonY = (backgroundHeight - buttonSize) / 2
         var currentX: CGFloat = 20
 
@@ -440,12 +452,10 @@ class PlayerContainerView: NSView {
             setBackgroundState(.locked)
         } else {
             // 否则是在播放器区域内但不在背景区域 -> transient
-            // 仅当当前是 hidden 时需要执行显示动画
             if backgroundState == .hidden {
                 setBackgroundState(.transient)
             } else if backgroundState == .locked {
-                // 如果原本是 locked，保持 locked 或转 transient？
-                // 这里按需求：如果原先是 locked，但鼠标离开背景进入播放器，则转 transient
+                // 如果原本是 locked，鼠标离开背景进入播放器，则转 transient
                 setBackgroundState(.transient)
             }
         }
@@ -495,7 +505,6 @@ class PlayerContainerView: NSView {
         case (.locked, .transient),
              (.transient, .transient):
             // 从 locked 到 transient 或在 transient 内刷新，都需要保持可见，但重置定时器
-            // 不再重复播放出现动画，以免闪动
             startAutoHideTimer()
 
         // -> locked
@@ -503,9 +512,6 @@ class PlayerContainerView: NSView {
             // locked 时一直可见，取消定时器并播放显示动画（若之前是 hidden）
             if oldState == .hidden {
                 animateShowBackground()
-            } else {
-                // 如果之前是 transient/locked，已经是显示状态，不重复动画
-                // do nothing
             }
 
         default:
@@ -519,12 +525,12 @@ class PlayerContainerView: NSView {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            controlsBackgroundView.animator().alphaValue = 1.0
+            controlsBackgroundView.animator().alphaValue = 1.0 // 逐渐显示背景
             let fromTransform = CATransform3DMakeScale(0.8, 0.8, 1.0)
             let toTransform = CATransform3DIdentity
             controlsBackgroundView.layer?.animateTransform(from: fromTransform,
                                                            to: toTransform,
-                                                           duration: duration)
+                                                           duration: duration) // 动画缩放
         }
     }
 
@@ -534,12 +540,12 @@ class PlayerContainerView: NSView {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            controlsBackgroundView.animator().alphaValue = 0.0
+            controlsBackgroundView.animator().alphaValue = 0.0 // 逐渐隐藏背景
             let toTransform = CATransform3DMakeScale(0.8, 0.8, 1.0)
             let currentTransform = controlsBackgroundView.layer?.transform ?? CATransform3DIdentity
             controlsBackgroundView.layer?.animateTransform(from: currentTransform,
                                                            to: toTransform,
-                                                           duration: duration)
+                                                           duration: duration) // 动画缩放
         }
     }
 
