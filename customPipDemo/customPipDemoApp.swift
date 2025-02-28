@@ -62,6 +62,9 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     @Published var player: AVPlayer!
     @Published var playerLayer: AVPlayerLayer!
     @Published var pipController: AVPictureInPictureController!
+    
+    /// 新增一个标题属性
+    @Published var videoTitle: String = "默认标题"
 
     /// 新增音量属性，持久化保存
     @Published var volume: Float {
@@ -126,7 +129,6 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
                 // 如果之前就已经是 error 状态，保持 error
                 playerState = .error(error)
             } else {
-                // 否则默认为 paused
                 playerState = .paused
             }
         }
@@ -247,6 +249,11 @@ class PlayerContainerView: NSView {
     // 毛玻璃背景视图
     private var controlsBackgroundView: NSVisualEffectView!
 
+    // 标题标签
+    private var titleLabel: NSTextField!
+    // 状态文字
+    private var statusLabel: NSTextField!
+
     // 音量图标
     private var volumeIcon: NSImageView!
     // 音量滑块
@@ -254,8 +261,6 @@ class PlayerContainerView: NSView {
 
     // 播放/暂停按钮
     private var playPauseButton: NSButton!
-    // 状态文字
-    private var statusLabel: NSTextField!
     // 画中画按钮
     private var pipButton: NSButton!
 
@@ -278,7 +283,7 @@ class PlayerContainerView: NSView {
     }
 
     // UI 改进相关常量
-    private let buttonSize: CGFloat = 32
+    private let buttonSize: CGFloat = 30
     private let buttonSpacing: CGFloat = 12
     private let controlsBackgroundCornerRadius: CGFloat = 12
 
@@ -311,6 +316,18 @@ class PlayerContainerView: NSView {
                 self?.updateStatusLabel(for: state)
             }
             .store(in: &cancellables)
+        
+        viewModel.$videoTitle
+                .sink { [weak self] newTitle in
+                    self?.titleLabel.stringValue = newTitle
+                }
+                .store(in: &cancellables)
+        
+        viewModel.$volume
+            .sink { [weak self] newVolume in
+                self?.updateVolumeIcon(for: newVolume)
+            }
+            .store(in: &cancellables)
     }
 
     required init?(coder: NSCoder) {
@@ -328,12 +345,11 @@ class PlayerContainerView: NSView {
     // MARK: - 设置圆角矩形背景 (NSVisualEffectView)
     private func setupControlsBackground() {
         controlsBackgroundView = NSVisualEffectView()
-        // 可尝试不同材质：.hudWindow, .popover, .underWindowBackground 等
-        controlsBackgroundView.material = .popover
+        // 可尝试不同材质：.hudWindow, .popover 等
+        controlsBackgroundView.material = .hudWindow
         controlsBackgroundView.blendingMode = .withinWindow
         controlsBackgroundView.state = .active  // 显示毛玻璃效果
 
-        // 圆角 + 遮罩
         controlsBackgroundView.wantsLayer = true
         controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius
         controlsBackgroundView.layer?.masksToBounds = true
@@ -342,7 +358,7 @@ class PlayerContainerView: NSView {
         controlsBackgroundView.alphaValue = 0.0
         controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.8, 0.8, 1.0)
 
-        // 如果不想要边框，可以设置为透明或直接注释掉
+        // 淡化/去掉边框
         controlsBackgroundView.layer?.borderColor = NSColor.clear.cgColor
         controlsBackgroundView.layer?.borderWidth = 0
 
@@ -351,13 +367,27 @@ class PlayerContainerView: NSView {
 
     // MARK: - 设置控件
     private func setupControls() {
-        // 1. 音量图标
+        // 标题标签
+        titleLabel = NSTextField(labelWithString: "我的视频标题")
+        titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.alignment = .center
+        controlsBackgroundView.addSubview(titleLabel)
+
+        // 状态文字
+        statusLabel = NSTextField(labelWithString: "未开始播放")
+        statusLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        statusLabel.textColor = .white
+        statusLabel.alignment = .center
+        controlsBackgroundView.addSubview(statusLabel)
+
+        // 音量图标
         volumeIcon = NSImageView()
-        volumeIcon.image = NSImage(systemSymbolName: "speaker.fill", accessibilityDescription: nil)
+//        volumeIcon.image = NSImage(systemSymbolName: "speaker.fill", accessibilityDescription: nil)
         volumeIcon.contentTintColor = .white
         controlsBackgroundView.addSubview(volumeIcon)
 
-        // 2. 音量滑块
+        // 音量滑块
         volumeSlider = NSSlider(value: Double(viewModel.volume),
                                 minValue: 0.0,
                                 maxValue: 1.0,
@@ -365,21 +395,13 @@ class PlayerContainerView: NSView {
                                 action: #selector(volumeChanged))
         controlsBackgroundView.addSubview(volumeSlider)
 
-        // 3. 播放/暂停按钮
+        // 播放/暂停按钮
         playPauseButton = NSButton(title: "", target: self, action: #selector(togglePlayPause))
         playPauseButton.isBordered = false
-        updatePlayPauseButtonImage() // 设置初始图标
+        updatePlayPauseButtonImage()
         controlsBackgroundView.addSubview(playPauseButton)
 
-        // 4. 状态文字
-        statusLabel = NSTextField(labelWithString: "未开始播放")
-        statusLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        statusLabel.textColor = .white
-        statusLabel.alignment = .center
-        // labelWithString 默认不可编辑、无边框、透明背景
-        controlsBackgroundView.addSubview(statusLabel)
-
-        // 5. 画中画按钮
+        // 画中画按钮
         pipButton = NSButton(title: "", target: self, action: #selector(togglePip))
         pipButton.isBordered = false
         updatePipButtonImage()
@@ -389,10 +411,8 @@ class PlayerContainerView: NSView {
     // 根据播放状态设置播放/暂停图标
     private func updatePlayPauseButtonImage() {
         if viewModel.playerState.isPlaying {
-            // 暂停图标
             playPauseButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "Pause")
         } else {
-            // 播放图标
             playPauseButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Play")
         }
         playPauseButton.contentTintColor = .white
@@ -420,8 +440,19 @@ class PlayerContainerView: NSView {
         case .error(_):
             statusLabel.stringValue = "播放出错"
         }
-        // 播放按钮图标也一起更新
         updatePlayPauseButtonImage()
+    }
+    
+    @available(macOS 13.0, *)
+    private func updateVolumeIcon(for volume: Float) {
+        // 将音量范围限制在 [0, 1]
+        let clampedVolume = max(0, min(volume, 1))
+
+        // 注意：要使用 init?(systemSymbolName:variableValue:)
+        volumeIcon.image = NSImage(systemSymbolName: "speaker.wave.3.fill",
+                                   variableValue: Double(clampedVolume),
+                                   accessibilityDescription: nil)
+        volumeIcon.contentTintColor = .white
     }
 
     // MARK: - 布局
@@ -431,55 +462,70 @@ class PlayerContainerView: NSView {
         // 播放器图层大小
         playerLayer?.frame = bounds
 
-        // 更新背景尺寸与位置
+        // 整个毛玻璃背景的尺寸
         let backgroundWidth: CGFloat = 420
-        let backgroundHeight: CGFloat = 56
+        let backgroundHeight: CGFloat = 110  // 高度多留一些容纳三行
+
+        // 背景位置：水平居中，距离底部 20
         let backgroundX = (bounds.width - backgroundWidth) / 2
-        let backgroundY: CGFloat = 20  // 距离底部 20
+        let backgroundY: CGFloat = 20
         controlsBackgroundView.frame = NSRect(x: backgroundX, y: backgroundY,
                                               width: backgroundWidth, height: backgroundHeight)
 
-        // 修复缩放中心：将 anchorPoint 设为 (0.5, 0.5)，position 设为背景视图中心
+        // 修复缩放中心：anchorPoint = (0.5, 0.5)
         if let layer = controlsBackgroundView.layer {
             layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
             layer.position = CGPoint(x: controlsBackgroundView.frame.midX,
                                      y: controlsBackgroundView.frame.midY)
         }
 
-        // 内部控件布局
-        // 大致从左到右依次：音量图标 -> 滑块 -> 播放按钮 -> 状态文字 -> PiP按钮
-        let margin: CGFloat = 12
-        let centerY = (backgroundHeight - buttonSize) / 2
+        // 开始排版内部控件
+        let margin: CGFloat = 8
+        let labelHeight: CGFloat = 20
 
-        // 1. 音量图标
-        volumeIcon.frame = NSRect(x: margin, y: centerY, width: buttonSize, height: buttonSize)
+        // 1. 标题标签（第一行，居中）
+        //   顶部留 8px，标题占 20px 高度
+        let titleY = backgroundHeight - margin - labelHeight
+        titleLabel.frame = NSRect(x: 0, y: titleY, width: backgroundWidth, height: labelHeight)
 
-        // 2. 滑块
-        let sliderWidth: CGFloat = 80
-        volumeSlider.frame = NSRect(x: volumeIcon.frame.maxX + buttonSpacing,
-                                    y: centerY,
-                                    width: sliderWidth,
-                                    height: buttonSize)
+        // 2. 状态文字（第二行，居中）
+        //   距离标题再留 4px
+        let statusY = titleY - labelHeight - 4
+        statusLabel.frame = NSRect(x: 0, y: statusY, width: backgroundWidth, height: labelHeight)
 
-        // 3. 播放/暂停按钮
-        playPauseButton.frame = NSRect(x: volumeSlider.frame.maxX + buttonSpacing,
-                                       y: centerY,
-                                       width: buttonSize,
-                                       height: buttonSize)
+        // 3. 第三行放音量控件、播放按钮、PiP按钮
+        //   距离状态文字再留 8px
+        let controlsY = statusY - buttonSize - 8
 
-        // 4. 状态文字
-        let labelWidth: CGFloat = 120
-        statusLabel.frame = NSRect(x: playPauseButton.frame.maxX + buttonSpacing,
-                                   y: 0,
-                                   width: labelWidth,
-                                   height: backgroundHeight)
-        // 注意：这里让文字垂直居中，可以通过设置 alignmentRect 或者直接让其高 = 背景高
+        // 布局思路：从左到右依次
+        //   volumeIcon -> volumeSlider -> playPauseButton -> pipButton
+        //   你也可以让其中一些居中
+        var currentX = margin
 
-        // 5. 画中画按钮
-        pipButton.frame = NSRect(x: statusLabel.frame.maxX + buttonSpacing,
-                                 y: centerY,
-                                 width: buttonSize,
-                                 height: buttonSize)
+        volumeIcon.frame = NSRect(x: currentX,
+                                  y: controlsY,
+                                  width: buttonSize, height: buttonSize)
+        currentX += (buttonSize + buttonSpacing)
+
+        let sliderWidth: CGFloat = 100
+        volumeSlider.frame = NSRect(x: currentX,
+                                    y: controlsY,
+                                    width: sliderWidth, height: buttonSize)
+        currentX += (sliderWidth + buttonSpacing)
+
+        playPauseButton.frame = NSRect(x: currentX,
+                                       y: controlsY,
+                                       width: buttonSize, height: buttonSize)
+        currentX += (buttonSize + buttonSpacing)
+
+        pipButton.frame = NSRect(x: currentX,
+                                 y: controlsY,
+                                 width: buttonSize, height: buttonSize)
+        
+        playPauseButton.imageScaling = .scaleProportionallyUpOrDown
+        pipButton.imageScaling = .scaleProportionallyUpOrDown
+        volumeIcon.imageScaling = .scaleProportionallyUpOrDown
+        volumeSlider.frame.size.height = 20
     }
 
     // MARK: - 更新追踪区域
@@ -715,6 +761,11 @@ struct ContentView: View {
                 Text("切换视频源")
             }
             .padding()
+            
+            Button("切换播放器标题") {
+                viewModel.videoTitle = "这是新的标题"
+            }
+            .keyboardShortcut(",", modifiers: [.command])
         }
     }
 }
@@ -726,4 +777,9 @@ extension NSTextView {
             drawsBackground = true
         }
     }
+}
+
+
+#Preview {
+    ContentView()
 }
