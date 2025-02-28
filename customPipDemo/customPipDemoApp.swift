@@ -147,6 +147,13 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     }
 
     // MARK: - 画中画
+    func pictureInPictureController(_ controller: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+        // 当用户从 PiP 返回时，将状态重置为 normal 并恢复主界面
+        pipState = .normal
+        completionHandler(true)
+    }
+    
     func togglePipMode() {
         // 如果当前处于 transitional 状态则忽略
         if pipState == .entering || pipState == .exiting { return }
