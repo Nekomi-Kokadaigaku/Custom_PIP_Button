@@ -262,6 +262,11 @@ class PlayerContainerView: NSView {
         }
     }
 
+    // UI 改进相关常量
+    private let buttonSize: CGFloat = 32
+    private let buttonSpacing: CGFloat = 24
+    private let controlsBackgroundCornerRadius: CGFloat = 16
+
     // 初始化
     init(frame frameRect: NSRect, viewModel: PlayerViewModel) {
         self.viewModel = viewModel
@@ -300,16 +305,16 @@ class PlayerContainerView: NSView {
         controlsBackgroundView = NSVisualEffectView()
         controlsBackgroundView.material = .hudWindow  // 可根据需要修改
         controlsBackgroundView.blendingMode = .withinWindow
-        controlsBackgroundView.state = .active  // 使其显示毛玻璃效果
+        controlsBackgroundView.state = .active  // 显示毛玻璃效果
 
         // 圆角 + 遮罩
         controlsBackgroundView.wantsLayer = true
-        controlsBackgroundView.layer?.cornerRadius = 12.0
+        controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius
         controlsBackgroundView.layer?.masksToBounds = true
 
-        // 初始隐藏（缩小 + 透明）
+        // 初始隐藏（缩小 + 透明），此处调整缩放比例为 0.8
         controlsBackgroundView.alphaValue = 0.0
-        controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.1, 0.1, 1.0)
+        controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.8, 0.8, 1.0)
 
         addSubview(controlsBackgroundView)
     }
@@ -373,31 +378,27 @@ class PlayerContainerView: NSView {
         // 播放器图层大小
         playerLayer?.frame = bounds
 
-        // 背景大小和位置
-        let backgroundWidth: CGFloat = 320
-        let backgroundHeight: CGFloat = 70
+        // 更新背景尺寸与位置
+        let backgroundWidth: CGFloat = 360
+        let backgroundHeight: CGFloat = 80
         let backgroundX = (bounds.width - backgroundWidth) / 2
         let backgroundY: CGFloat = 20  // 距离底部 20
         controlsBackgroundView.frame = NSRect(x: backgroundX, y: backgroundY,
                                               width: backgroundWidth, height: backgroundHeight)
 
-        // 内部控件布局
-        let buttonSize: CGFloat = 24
+        // 内部控件布局，使用优化后的按钮尺寸与间距
         let buttonY = (backgroundHeight - buttonSize) / 2
         var currentX: CGFloat = 20
 
-        // 播放/暂停按钮位置
         playPauseButton.frame = NSRect(x: currentX, y: buttonY,
                                        width: buttonSize, height: buttonSize)
-        currentX += (buttonSize + 20)
+        currentX += (buttonSize + buttonSpacing)
 
-        // 画中画按钮位置
         pipButton.frame = NSRect(x: currentX, y: buttonY,
                                  width: buttonSize, height: buttonSize)
-        currentX += (buttonSize + 20)
+        currentX += (buttonSize + buttonSpacing)
 
-        // 音量滑块位置
-        let sliderWidth: CGFloat = 120
+        let sliderWidth: CGFloat = 140
         volumeSlider.frame = NSRect(x: currentX, y: buttonY,
                                     width: sliderWidth, height: buttonSize)
     }
@@ -514,12 +515,12 @@ class PlayerContainerView: NSView {
 
     // MARK: - 动画显示背景
     private func animateShowBackground() {
-        let duration: CFTimeInterval = 0.4
+        let duration: CFTimeInterval = 0.3
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             controlsBackgroundView.animator().alphaValue = 1.0
-            // 缩放动画
-            let fromTransform = CATransform3DMakeScale(0.1, 0.1, 1.0)
+            let fromTransform = CATransform3DMakeScale(0.8, 0.8, 1.0)
             let toTransform = CATransform3DIdentity
             controlsBackgroundView.layer?.animateTransform(from: fromTransform,
                                                            to: toTransform,
@@ -529,12 +530,14 @@ class PlayerContainerView: NSView {
 
     // MARK: - 动画隐藏背景
     private func animateHideBackground() {
-        let duration: CFTimeInterval = 0.4
+        let duration: CFTimeInterval = 0.3
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             controlsBackgroundView.animator().alphaValue = 0.0
-            let toTransform = CATransform3DMakeScale(0.1, 0.1, 1.0)
-            controlsBackgroundView.layer?.animateTransform(from: controlsBackgroundView.layer?.transform ?? CATransform3DIdentity,
+            let toTransform = CATransform3DMakeScale(0.8, 0.8, 1.0)
+            let currentTransform = controlsBackgroundView.layer?.transform ?? CATransform3DIdentity
+            controlsBackgroundView.layer?.animateTransform(from: currentTransform,
                                                            to: toTransform,
                                                            duration: duration)
         }
