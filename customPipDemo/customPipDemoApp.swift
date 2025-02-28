@@ -62,17 +62,17 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     @Published var player: AVPlayer!
     @Published var playerLayer: AVPlayerLayer!
     @Published var pipController: AVPictureInPictureController!
-    
-    /// 新增一个标题属性
-    @Published var videoTitle: String = "默认标题"
 
-    /// 新增音量属性，持久化保存
+    /// 音量属性，持久化保存
     @Published var volume: Float {
         didSet {
             player.volume = volume
             UserDefaults.standard.set(volume, forKey: "playerVolume")
         }
     }
+
+    /// 新增：可外部修改的标题
+    @Published var videoTitle: String = "默认标题"
 
     static var shared = PlayerViewModel()
 
@@ -123,10 +123,8 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
             playerState = .loading
         } else {
-            // 若既不是 playing 也不是 loading，则判为 paused
-            //（更严谨的做法是区分 paused/idle/error 等）
             if case .error(let error) = playerState {
-                // 如果之前就已经是 error 状态，保持 error
+                // 如果之前就是错误状态，保持
                 playerState = .error(error)
             } else {
                 playerState = .paused
@@ -134,8 +132,8 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         }
     }
 
+    // MARK: - 播放控制
     func play() {
-        // 允许从 idle 或 paused 状态播放
         if playerState == .paused || playerState == .idle {
             player.play()
             playerState = .playing
@@ -148,19 +146,35 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         playerState = .paused
     }
 
+    // MARK: - 画中画
     func togglePipMode() {
-        switch pipState {
-        case .normal:
+        // 如果当前处于 transitional 状态则忽略
+        if pipState == .entering || pipState == .exiting { return }
+        
+        if pipState == .normal {
             pipState = .entering
             pipController.startPictureInPicture()
-        case .active:
+        } else if pipState == .active {
             pipState = .exiting
             pipController.stopPictureInPicture()
-        default:
-            break // 正在转换状态时忽略操作
         }
     }
 
+    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        pipState = .active
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        pipState = .normal
+    }
+
+    func pictureInPictureController(_ controller: AVPictureInPictureController,
+                                    failedToStartPictureInPictureWithError error: Error) {
+        pipState = .normal
+        playerState = .error(error)
+    }
+
+    // MARK: - 切换视频源
     func switchVideoSource(to urlString: String) {
         guard let url = URL(string: urlString) else {
             playerState = .error(NSError(domain: "Invalid URL", code: -1, userInfo: [NSLocalizedDescriptionKey: "无效的 URL"]))
@@ -169,7 +183,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
         playerState = .loading
 
-        if case .active = pipState {
+        if pipState == .active {
             pipState = .exiting
             pipController.stopPictureInPicture()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -189,6 +203,9 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         player.volume = volume
         setupTimeObserver()
         setupPlayerLayer()
+        
+        // 【新增】切换视频源后确保 pipState 重置为 normal
+        pipState = .normal
 
         // 开始播放
         player.play()
@@ -208,20 +225,6 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
         player.pause()
         player.replaceCurrentItem(with: nil)
-    }
-
-    // MARK: - PiP Delegate Methods
-    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        pipState = .active
-    }
-
-    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        pipState = .normal
-    }
-
-    func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        pipState = .normal
-        playerState = .error(error)
     }
 
     deinit {
@@ -283,11 +286,11 @@ class PlayerContainerView: NSView {
     }
 
     // UI 改进相关常量
-    private let buttonSize: CGFloat = 30
+    private let buttonSize: CGFloat = 44
     private let buttonSpacing: CGFloat = 12
     private let controlsBackgroundCornerRadius: CGFloat = 12
 
-    // 监听取消集合（用于观察 PlayerState 等）
+    // 监听取消集合（用于观察 PlayerState、volume、videoTitle、pipState 等）
     private var cancellables = Set<AnyCancellable>()
 
     // 初始化
@@ -316,16 +319,25 @@ class PlayerContainerView: NSView {
                 self?.updateStatusLabel(for: state)
             }
             .store(in: &cancellables)
-        
-        viewModel.$videoTitle
-                .sink { [weak self] newTitle in
-                    self?.titleLabel.stringValue = newTitle
-                }
-                .store(in: &cancellables)
-        
+
+        // 监听 volume，动态更新音量图标
         viewModel.$volume
             .sink { [weak self] newVolume in
                 self?.updateVolumeIcon(for: newVolume)
+            }
+            .store(in: &cancellables)
+
+        // 监听 videoTitle，更新标题
+        viewModel.$videoTitle
+            .sink { [weak self] newTitle in
+                self?.titleLabel.stringValue = newTitle
+            }
+            .store(in: &cancellables)
+
+        // 监听 pipState，更新画中画按钮图标
+        viewModel.$pipState
+            .sink { [weak self] _ in
+                self?.updatePipButtonImage()
             }
             .store(in: &cancellables)
     }
@@ -345,10 +357,9 @@ class PlayerContainerView: NSView {
     // MARK: - 设置圆角矩形背景 (NSVisualEffectView)
     private func setupControlsBackground() {
         controlsBackgroundView = NSVisualEffectView()
-        // 可尝试不同材质：.hudWindow, .popover 等
         controlsBackgroundView.material = .hudWindow
         controlsBackgroundView.blendingMode = .withinWindow
-        controlsBackgroundView.state = .active  // 显示毛玻璃效果
+        controlsBackgroundView.state = .active
 
         controlsBackgroundView.wantsLayer = true
         controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius
@@ -358,7 +369,7 @@ class PlayerContainerView: NSView {
         controlsBackgroundView.alphaValue = 0.0
         controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.8, 0.8, 1.0)
 
-        // 淡化/去掉边框
+        // 去掉/淡化边框
         controlsBackgroundView.layer?.borderColor = NSColor.clear.cgColor
         controlsBackgroundView.layer?.borderWidth = 0
 
@@ -368,7 +379,7 @@ class PlayerContainerView: NSView {
     // MARK: - 设置控件
     private func setupControls() {
         // 标题标签
-        titleLabel = NSTextField(labelWithString: "我的视频标题")
+        titleLabel = NSTextField(labelWithString: viewModel.videoTitle)
         titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.alignment = .center
@@ -383,8 +394,8 @@ class PlayerContainerView: NSView {
 
         // 音量图标
         volumeIcon = NSImageView()
-//        volumeIcon.image = NSImage(systemSymbolName: "speaker.fill", accessibilityDescription: nil)
-        volumeIcon.contentTintColor = .white
+        // 不要在这里固定图标，后面用 variableValue 动态更新
+        volumeIcon.imageScaling = .scaleProportionallyUpOrDown
         controlsBackgroundView.addSubview(volumeIcon)
 
         // 音量滑块
@@ -398,17 +409,20 @@ class PlayerContainerView: NSView {
         // 播放/暂停按钮
         playPauseButton = NSButton(title: "", target: self, action: #selector(togglePlayPause))
         playPauseButton.isBordered = false
+        playPauseButton.imageScaling = .scaleProportionallyUpOrDown
         updatePlayPauseButtonImage()
         controlsBackgroundView.addSubview(playPauseButton)
 
         // 画中画按钮
         pipButton = NSButton(title: "", target: self, action: #selector(togglePip))
         pipButton.isBordered = false
+        pipButton.imageScaling = .scaleProportionallyUpOrDown
         updatePipButtonImage()
         controlsBackgroundView.addSubview(pipButton)
     }
 
-    // 根据播放状态设置播放/暂停图标
+    // MARK: - 动态更新 UI
+
     private func updatePlayPauseButtonImage() {
         if viewModel.playerState.isPlaying {
             playPauseButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "Pause")
@@ -418,9 +432,9 @@ class PlayerContainerView: NSView {
         playPauseButton.contentTintColor = .white
     }
 
-    // 根据画中画状态设置图标
     private func updatePipButtonImage() {
-        if viewModel.pipState == .active {
+        // 当状态为 active 或 entering 时，均显示退出图标
+        if viewModel.pipState == .active || viewModel.pipState == .entering {
             pipButton.image = NSImage(systemSymbolName: "pip.exit", accessibilityDescription: "Exit PiP")
         } else {
             pipButton.image = NSImage(systemSymbolName: "pip.enter", accessibilityDescription: "Enter PiP")
@@ -442,16 +456,20 @@ class PlayerContainerView: NSView {
         }
         updatePlayPauseButtonImage()
     }
-    
-    @available(macOS 13.0, *)
+
+    /// 使用 variableValue 来动态显示不同波浪数 (macOS 13+)
     private func updateVolumeIcon(for volume: Float) {
         // 将音量范围限制在 [0, 1]
         let clampedVolume = max(0, min(volume, 1))
-
-        // 注意：要使用 init?(systemSymbolName:variableValue:)
-        volumeIcon.image = NSImage(systemSymbolName: "speaker.wave.3.fill",
-                                   variableValue: Double(clampedVolume),
-                                   accessibilityDescription: nil)
+        if #available(macOS 13.0, *) {
+            volumeIcon.image = NSImage(systemSymbolName: "speaker.wave.3.fill",
+                                       variableValue: Double(clampedVolume),
+                                       accessibilityDescription: nil)
+        } else {
+            // 如果要兼容老系统，可以简单用 speaker.wave.3.fill
+            volumeIcon.image = NSImage(systemSymbolName: "speaker.wave.3.fill",
+                                       accessibilityDescription: nil)
+        }
         volumeIcon.contentTintColor = .white
     }
 
@@ -464,7 +482,7 @@ class PlayerContainerView: NSView {
 
         // 整个毛玻璃背景的尺寸
         let backgroundWidth: CGFloat = 420
-        let backgroundHeight: CGFloat = 110  // 高度多留一些容纳三行
+        let backgroundHeight: CGFloat = 110  // 高度留够容纳三行
 
         // 背景位置：水平居中，距离底部 20
         let backgroundX = (bounds.width - backgroundWidth) / 2
@@ -484,22 +502,15 @@ class PlayerContainerView: NSView {
         let labelHeight: CGFloat = 20
 
         // 1. 标题标签（第一行，居中）
-        //   顶部留 8px，标题占 20px 高度
         let titleY = backgroundHeight - margin - labelHeight
         titleLabel.frame = NSRect(x: 0, y: titleY, width: backgroundWidth, height: labelHeight)
 
         // 2. 状态文字（第二行，居中）
-        //   距离标题再留 4px
         let statusY = titleY - labelHeight - 4
         statusLabel.frame = NSRect(x: 0, y: statusY, width: backgroundWidth, height: labelHeight)
 
         // 3. 第三行放音量控件、播放按钮、PiP按钮
-        //   距离状态文字再留 8px
         let controlsY = statusY - buttonSize - 8
-
-        // 布局思路：从左到右依次
-        //   volumeIcon -> volumeSlider -> playPauseButton -> pipButton
-        //   你也可以让其中一些居中
         var currentX = margin
 
         volumeIcon.frame = NSRect(x: currentX,
@@ -521,11 +532,6 @@ class PlayerContainerView: NSView {
         pipButton.frame = NSRect(x: currentX,
                                  y: controlsY,
                                  width: buttonSize, height: buttonSize)
-        
-        playPauseButton.imageScaling = .scaleProportionallyUpOrDown
-        pipButton.imageScaling = .scaleProportionallyUpOrDown
-        volumeIcon.imageScaling = .scaleProportionallyUpOrDown
-        volumeSlider.frame.size.height = 20
     }
 
     // MARK: - 更新追踪区域
@@ -542,14 +548,18 @@ class PlayerContainerView: NSView {
 
         // 播放器区域追踪
         containerTrackingArea = NSTrackingArea(rect: bounds,
-                                               options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                               options: [.mouseEnteredAndExited,
+                                                         .activeInKeyWindow,
+                                                         .inVisibleRect],
                                                owner: self,
                                                userInfo: nil)
         addTrackingArea(containerTrackingArea!)
 
         // 背景区域追踪
         backgroundTrackingArea = NSTrackingArea(rect: controlsBackgroundView.bounds,
-                                                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                                options: [.mouseEnteredAndExited,
+                                                          .activeInKeyWindow,
+                                                          .inVisibleRect],
                                                 owner: self,
                                                 userInfo: nil)
         controlsBackgroundView.addTrackingArea(backgroundTrackingArea!)
@@ -557,16 +567,15 @@ class PlayerContainerView: NSView {
 
     // MARK: - 鼠标事件
     override func mouseEntered(with event: NSEvent) {
-        // 第一步：把 window 坐标 -> container(self) 坐标
+        // 两步转换：window -> self -> controlsBackgroundView
         let locationInSelf = convert(event.locationInWindow, from: nil)
-        // 第二步：把 container(self) 坐标 -> controlsBackgroundView 坐标
         let locationInBackground = controlsBackgroundView.convert(locationInSelf, from: self)
 
-        // 若坐标在 background 的 bounds 内，则锁定
+        // 如果在背景区域内 -> locked
         if controlsBackgroundView.bounds.contains(locationInBackground) {
             setBackgroundState(.locked)
         } else {
-            // 否则只是进入播放器区域
+            // 否则是在播放器区域内 -> transient
             if backgroundState == .hidden {
                 setBackgroundState(.transient)
             } else if backgroundState == .locked {
@@ -579,13 +588,13 @@ class PlayerContainerView: NSView {
         let locationInSelf = convert(event.locationInWindow, from: nil)
         let locationInBackground = controlsBackgroundView.convert(locationInSelf, from: self)
 
-        // 如果已经离开整个播放器区域
+        // 若鼠标离开整个播放器
         if !bounds.contains(locationInSelf) {
             setBackgroundState(.hidden)
             return
         }
 
-        // 否则只是离开了 background，但还在播放器
+        // 否则说明是离开背景区域，但仍在播放器内
         if !controlsBackgroundView.bounds.contains(locationInBackground) {
             if backgroundState == .locked {
                 setBackgroundState(.transient)
@@ -619,10 +628,12 @@ class PlayerContainerView: NSView {
 
         // -> locked
         case (_, .locked):
-            // locked 时一直可见，取消定时器并播放显示动画（若之前是 hidden）
             if oldState == .hidden {
                 animateShowBackground()
             }
+
+        default:
+            break
         }
     }
 
@@ -666,7 +677,6 @@ class PlayerContainerView: NSView {
     }
 
     @objc private func autoHideTimerFired() {
-        // 若当前仍是 transient，则隐藏
         if backgroundState == .transient {
             setBackgroundState(.hidden)
         }
@@ -679,16 +689,18 @@ class PlayerContainerView: NSView {
         } else {
             viewModel.play()
         }
+        // 这里也可以手动更新，但实际上我们在 sink 里也会更新
         updatePlayPauseButtonImage()
     }
 
     @objc private func togglePip() {
         viewModel.togglePipMode()
-        updatePipButtonImage()
+        // updatePipButtonImage() 不再需要手动，因为有 sink 订阅 pipState
     }
 
     @objc private func volumeChanged() {
         viewModel.volume = Float(volumeSlider.doubleValue)
+        // 不需要手动 updateVolumeIcon()，也会触发 sink
     }
 
     // 在切换视频源后更新 playerLayer
@@ -751,17 +763,15 @@ struct ContentView: View {
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding([.leading, .trailing])
 
-            Button(action: {
-                viewModel.switchVideoSource(to: m3u8Link)
-            }) {
-                Text("切换视频源")
+            HStack {
+                Button("切换视频源") {
+                    viewModel.switchVideoSource(to: m3u8Link)
+                }
+                Button("切换播放器标题") {
+                    viewModel.videoTitle = "这是新的标题"
+                }
             }
             .padding()
-            
-            Button("切换播放器标题") {
-                viewModel.videoTitle = "这是新的标题"
-            }
-            .keyboardShortcut(",", modifiers: [.command])
         }
     }
 }
