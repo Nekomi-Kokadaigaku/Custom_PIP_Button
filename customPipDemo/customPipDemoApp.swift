@@ -8,6 +8,8 @@
 import AVKit
 import SwiftUI
 
+import Combine
+
 // MARK: - 播放器状态定义
 enum PlayerState: Equatable {
     case idle
@@ -46,9 +48,6 @@ enum PiPState: Equatable {
 }
 
 // MARK: - 圆角矩形背景的显示状态
-/// - hidden: 完全隐藏
-/// - transient: 短暂显示（自动隐藏）
-/// - locked: 鼠标停留在背景区域，锁定显示
 enum BackgroundState {
     case hidden
     case transient
@@ -75,6 +74,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     static var shared = PlayerViewModel()
 
     private var playerTimeObserver: Any?
+    private var cancellables = Set<AnyCancellable>()
 
     override init() {
         // 加载保存的音量值，若不存在则默认为 1.0
@@ -117,8 +117,18 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         // 使用 AVPlayer 的 timeControlStatus 来更新状态
         if player.timeControlStatus == .playing {
             playerState = .playing
+        } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            playerState = .loading
         } else {
-            playerState = .paused
+            // 若既不是 playing 也不是 loading，则判为 paused
+            //（更严谨的做法是区分 paused/idle/error 等）
+            if case .error(let error) = playerState {
+                // 如果之前就已经是 error 状态，保持 error
+                playerState = .error(error)
+            } else {
+                // 否则默认为 paused
+                playerState = .paused
+            }
         }
     }
 
@@ -234,15 +244,20 @@ class PlayerContainerView: NSView {
         }
     }
 
-    // 使用 NSVisualEffectView 替代 NSView 作为圆角背景
+    // 毛玻璃背景视图
     private var controlsBackgroundView: NSVisualEffectView!
+
+    // 音量图标
+    private var volumeIcon: NSImageView!
+    // 音量滑块
+    private var volumeSlider: NSSlider!
 
     // 播放/暂停按钮
     private var playPauseButton: NSButton!
+    // 状态文字
+    private var statusLabel: NSTextField!
     // 画中画按钮
     private var pipButton: NSButton!
-    // 音量滑块
-    private var volumeSlider: NSSlider!
 
     // 跟踪区域：播放器区域
     private var containerTrackingArea: NSTrackingArea?
@@ -264,8 +279,11 @@ class PlayerContainerView: NSView {
 
     // UI 改进相关常量
     private let buttonSize: CGFloat = 32
-    private let buttonSpacing: CGFloat = 24
-    private let controlsBackgroundCornerRadius: CGFloat = 16
+    private let buttonSpacing: CGFloat = 12
+    private let controlsBackgroundCornerRadius: CGFloat = 12
+
+    // 监听取消集合（用于观察 PlayerState 等）
+    private var cancellables = Set<AnyCancellable>()
 
     // 初始化
     init(frame frameRect: NSRect, viewModel: PlayerViewModel) {
@@ -286,6 +304,13 @@ class PlayerContainerView: NSView {
         // 初始化控件背景和控件
         setupControlsBackground()
         setupControls()
+
+        // 监听 playerState，动态更新状态文字
+        viewModel.$playerState
+            .sink { [weak self] state in
+                self?.updateStatusLabel(for: state)
+            }
+            .store(in: &cancellables)
     }
 
     required init?(coder: NSCoder) {
@@ -303,75 +328,100 @@ class PlayerContainerView: NSView {
     // MARK: - 设置圆角矩形背景 (NSVisualEffectView)
     private func setupControlsBackground() {
         controlsBackgroundView = NSVisualEffectView()
-        controlsBackgroundView.material = .hudWindow  // 设置背景材质
+        // 可尝试不同材质：.hudWindow, .popover, .underWindowBackground 等
+        controlsBackgroundView.material = .popover
         controlsBackgroundView.blendingMode = .withinWindow
         controlsBackgroundView.state = .active  // 显示毛玻璃效果
 
         // 圆角 + 遮罩
         controlsBackgroundView.wantsLayer = true
-        controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius // 设置圆角半径
-        controlsBackgroundView.layer?.masksToBounds = true // 确保子视图不会超出圆角边界
+        controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius
+        controlsBackgroundView.layer?.masksToBounds = true
 
-        // 初始隐藏（缩小 + 透明），此处调整缩放比例为 0.8
+        // 初始隐藏（缩小 + 透明）
         controlsBackgroundView.alphaValue = 0.0
         controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.8, 0.8, 1.0)
 
-        // 添加边框
-        controlsBackgroundView.layer?.borderColor = NSColor.white.cgColor // 设置边框颜色
-        controlsBackgroundView.layer?.borderWidth = 1.0 // 设置边框宽度
+        // 如果不想要边框，可以设置为透明或直接注释掉
+        controlsBackgroundView.layer?.borderColor = NSColor.clear.cgColor
+        controlsBackgroundView.layer?.borderWidth = 0
 
-        addSubview(controlsBackgroundView) // 将背景视图添加到容器视图中
+        addSubview(controlsBackgroundView)
     }
 
     // MARK: - 设置控件
     private func setupControls() {
-        // 播放/暂停按钮 (SF Symbol)
-        playPauseButton = NSButton(title: "", target: self, action: #selector(togglePlayPause))
-        playPauseButton.bezelStyle = .texturedRounded
-        playPauseButton.isBordered = false
-        updatePlayPauseButtonImage() // 设置初始图标
-        controlsBackgroundView.addSubview(playPauseButton)
+        // 1. 音量图标
+        volumeIcon = NSImageView()
+        volumeIcon.image = NSImage(systemSymbolName: "speaker.fill", accessibilityDescription: nil)
+        volumeIcon.contentTintColor = .white
+        controlsBackgroundView.addSubview(volumeIcon)
 
-        // 画中画按钮 (SF Symbol)
-        pipButton = NSButton(title: "", target: self, action: #selector(togglePip))
-        pipButton.bezelStyle = .texturedRounded
-        pipButton.isBordered = false
-        updatePipButtonImage() // 设置初始图标
-        controlsBackgroundView.addSubview(pipButton)
-
-        // 音量滑块
+        // 2. 音量滑块
         volumeSlider = NSSlider(value: Double(viewModel.volume),
                                 minValue: 0.0,
                                 maxValue: 1.0,
                                 target: self,
                                 action: #selector(volumeChanged))
         controlsBackgroundView.addSubview(volumeSlider)
+
+        // 3. 播放/暂停按钮
+        playPauseButton = NSButton(title: "", target: self, action: #selector(togglePlayPause))
+        playPauseButton.isBordered = false
+        updatePlayPauseButtonImage() // 设置初始图标
+        controlsBackgroundView.addSubview(playPauseButton)
+
+        // 4. 状态文字
+        statusLabel = NSTextField(labelWithString: "未开始播放")
+        statusLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        statusLabel.textColor = .white
+        statusLabel.alignment = .center
+        // labelWithString 默认不可编辑、无边框、透明背景
+        controlsBackgroundView.addSubview(statusLabel)
+
+        // 5. 画中画按钮
+        pipButton = NSButton(title: "", target: self, action: #selector(togglePip))
+        pipButton.isBordered = false
+        updatePipButtonImage()
+        controlsBackgroundView.addSubview(pipButton)
     }
 
     // 根据播放状态设置播放/暂停图标
     private func updatePlayPauseButtonImage() {
         if viewModel.playerState.isPlaying {
             // 暂停图标
-            playPauseButton.image = NSImage(systemSymbolName: "pause.fill",
-                                            accessibilityDescription: "Pause")
+            playPauseButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "Pause")
         } else {
             // 播放图标
-            playPauseButton.image = NSImage(systemSymbolName: "play.fill",
-                                            accessibilityDescription: "Play")
+            playPauseButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Play")
         }
+        playPauseButton.contentTintColor = .white
     }
 
     // 根据画中画状态设置图标
     private func updatePipButtonImage() {
         if viewModel.pipState == .active {
-            // 退出画中画图标
-            pipButton.image = NSImage(systemSymbolName: "pip.exit",
-                                      accessibilityDescription: "Exit PiP")
+            pipButton.image = NSImage(systemSymbolName: "pip.exit", accessibilityDescription: "Exit PiP")
         } else {
-            // 进入画中画图标
-            pipButton.image = NSImage(systemSymbolName: "pip.enter",
-                                      accessibilityDescription: "Enter PiP")
+            pipButton.image = NSImage(systemSymbolName: "pip.enter", accessibilityDescription: "Enter PiP")
         }
+        pipButton.contentTintColor = .white
+    }
+
+    // 动态更新状态文字
+    private func updateStatusLabel(for state: PlayerState) {
+        switch state {
+        case .idle, .paused:
+            statusLabel.stringValue = "未开始播放"
+        case .playing:
+            statusLabel.stringValue = "播放中"
+        case .loading:
+            statusLabel.stringValue = "加载中"
+        case .error(_):
+            statusLabel.stringValue = "播放出错"
+        }
+        // 播放按钮图标也一起更新
+        updatePlayPauseButtonImage()
     }
 
     // MARK: - 布局
@@ -382,37 +432,54 @@ class PlayerContainerView: NSView {
         playerLayer?.frame = bounds
 
         // 更新背景尺寸与位置
-        let backgroundWidth: CGFloat = 360
-        let backgroundHeight: CGFloat = 80
+        let backgroundWidth: CGFloat = 420
+        let backgroundHeight: CGFloat = 56
         let backgroundX = (bounds.width - backgroundWidth) / 2
         let backgroundY: CGFloat = 20  // 距离底部 20
         controlsBackgroundView.frame = NSRect(x: backgroundX, y: backgroundY,
                                               width: backgroundWidth, height: backgroundHeight)
 
-        // **修复核心：将 anchorPoint 设为 (0.5, 0.5)，并将 position 调整到视图中心。**
+        // 修复缩放中心：将 anchorPoint 设为 (0.5, 0.5)，position 设为背景视图中心
         if let layer = controlsBackgroundView.layer {
             layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-            // position 的坐标是相对于父视图（本容器视图）的左下角原点
-            // 因此这里要将背景视图的中心 (frame.midX, frame.midY) 赋给 layer.position
             layer.position = CGPoint(x: controlsBackgroundView.frame.midX,
                                      y: controlsBackgroundView.frame.midY)
         }
 
         // 内部控件布局
-        let buttonY = (backgroundHeight - buttonSize) / 2
-        var currentX: CGFloat = 20
+        // 大致从左到右依次：音量图标 -> 滑块 -> 播放按钮 -> 状态文字 -> PiP按钮
+        let margin: CGFloat = 12
+        let centerY = (backgroundHeight - buttonSize) / 2
 
-        playPauseButton.frame = NSRect(x: currentX, y: buttonY,
-                                       width: buttonSize, height: buttonSize)
-        currentX += (buttonSize + buttonSpacing)
+        // 1. 音量图标
+        volumeIcon.frame = NSRect(x: margin, y: centerY, width: buttonSize, height: buttonSize)
 
-        pipButton.frame = NSRect(x: currentX, y: buttonY,
-                                 width: buttonSize, height: buttonSize)
-        currentX += (buttonSize + buttonSpacing)
+        // 2. 滑块
+        let sliderWidth: CGFloat = 80
+        volumeSlider.frame = NSRect(x: volumeIcon.frame.maxX + buttonSpacing,
+                                    y: centerY,
+                                    width: sliderWidth,
+                                    height: buttonSize)
 
-        let sliderWidth: CGFloat = 140
-        volumeSlider.frame = NSRect(x: currentX, y: buttonY,
-                                    width: sliderWidth, height: buttonSize)
+        // 3. 播放/暂停按钮
+        playPauseButton.frame = NSRect(x: volumeSlider.frame.maxX + buttonSpacing,
+                                       y: centerY,
+                                       width: buttonSize,
+                                       height: buttonSize)
+
+        // 4. 状态文字
+        let labelWidth: CGFloat = 120
+        statusLabel.frame = NSRect(x: playPauseButton.frame.maxX + buttonSpacing,
+                                   y: 0,
+                                   width: labelWidth,
+                                   height: backgroundHeight)
+        // 注意：这里让文字垂直居中，可以通过设置 alignmentRect 或者直接让其高 = 背景高
+
+        // 5. 画中画按钮
+        pipButton.frame = NSRect(x: statusLabel.frame.maxX + buttonSpacing,
+                                 y: centerY,
+                                 width: buttonSize,
+                                 height: buttonSize)
     }
 
     // MARK: - 更新追踪区域
@@ -451,11 +518,10 @@ class PlayerContainerView: NSView {
         if controlsBackgroundView.bounds.contains(locationInBackground) {
             setBackgroundState(.locked)
         } else {
-            // 否则是在播放器区域内但不在背景区域 -> transient
+            // 否则是在播放器区域内 -> transient
             if backgroundState == .hidden {
                 setBackgroundState(.transient)
             } else if backgroundState == .locked {
-                // 如果原本是 locked，鼠标离开背景进入播放器，则转 transient
                 setBackgroundState(.transient)
             }
         }
@@ -498,13 +564,12 @@ class PlayerContainerView: NSView {
 
         // -> transient
         case (.hidden, .transient):
-            // 从 hidden 到 transient，需要显示动画
             animateShowBackground()
             startAutoHideTimer()
 
         case (.locked, .transient),
              (.transient, .transient):
-            // 从 locked 到 transient 或在 transient 内刷新，都需要保持可见，但重置定时器
+            // 需要保持可见，但重置定时器
             startAutoHideTimer()
 
         // -> locked
@@ -525,12 +590,12 @@ class PlayerContainerView: NSView {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            controlsBackgroundView.animator().alphaValue = 1.0 // 逐渐显示背景
+            controlsBackgroundView.animator().alphaValue = 1.0
             let fromTransform = CATransform3DMakeScale(0.8, 0.8, 1.0)
             let toTransform = CATransform3DIdentity
             controlsBackgroundView.layer?.animateTransform(from: fromTransform,
                                                            to: toTransform,
-                                                           duration: duration) // 动画缩放
+                                                           duration: duration)
         }
     }
 
@@ -540,12 +605,12 @@ class PlayerContainerView: NSView {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            controlsBackgroundView.animator().alphaValue = 0.0 // 逐渐隐藏背景
+            controlsBackgroundView.animator().alphaValue = 0.0
             let toTransform = CATransform3DMakeScale(0.8, 0.8, 1.0)
             let currentTransform = controlsBackgroundView.layer?.transform ?? CATransform3DIdentity
             controlsBackgroundView.layer?.animateTransform(from: currentTransform,
                                                            to: toTransform,
-                                                           duration: duration) // 动画缩放
+                                                           duration: duration)
         }
     }
 
