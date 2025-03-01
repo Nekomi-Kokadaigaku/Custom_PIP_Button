@@ -79,8 +79,9 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     private var playerTimeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
 
+    // 在 init() 中
     override init() {
-        // 加载保存的音量值，若不存在则默认为 1.0
+        // 加载保存的音量值...
         if let savedVolume = UserDefaults.standard.object(forKey: "playerVolume") as? Float {
             volume = savedVolume
         } else {
@@ -93,6 +94,14 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         let url = URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!
         player = AVPlayer(url: url)
         player.volume = volume
+
+        // 【新增】设置直播相关属性：确保播放最新片段
+        if let item = player.currentItem {
+            if #available(macOS 11.0, *) {
+                item.automaticallyPreservesTimeOffsetFromLive = true
+            }
+        }
+        player.automaticallyWaitsToMinimizeStalling = false
 
         setupTimeObserver()
         setupPlayerLayer()
@@ -135,10 +144,28 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     // MARK: - 播放控制
     func play() {
         if playerState == .paused || playerState == .idle {
-            player.play()
-            playerState = .playing
+            // 如果当前 AVPlayerItem 是直播（duration 为无限大），则先 seek 到 live edge
+            if let currentItem = player.currentItem, currentItem.duration.isIndefinite {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    guard let self = self,
+                          let timeRange = self.player.currentItem?.seekableTimeRanges.last?.timeRangeValue else {
+                        self?.player.play()
+                        self?.playerState = .playing
+                        return
+                    }
+                    let livePosition = CMTimeAdd(timeRange.start, timeRange.duration)
+                    self.player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        self.player.play()
+                        self.playerState = .playing
+                    }
+                }
+            } else {
+                player.play()
+                playerState = .playing
+            }
         }
     }
+
 
     func pause() {
         guard playerState == .playing else { return }
@@ -147,8 +174,10 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     }
 
     // MARK: - 画中画
-    func pictureInPictureController(_ controller: AVPictureInPictureController,
-        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+    func pictureInPictureController(
+        _ controller: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
         // 当用户从 PiP 返回时，将状态重置为 normal 并恢复主界面
         pipState = .normal
         completionHandler(true)
@@ -175,8 +204,10 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         pipState = .normal
     }
 
-    func pictureInPictureController(_ controller: AVPictureInPictureController,
-                                    failedToStartPictureInPictureWithError error: Error) {
+    func pictureInPictureController(
+        _ controller: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
         pipState = .normal
         playerState = .error(error)
     }
@@ -193,7 +224,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         if pipState == .active {
             pipState = .exiting
             pipController.stopPictureInPicture()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.performVideoSourceSwitch(url: url)
             }
         } else {
@@ -205,18 +236,32 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         // 清理旧资源
         cleanupResources()
 
-        // 创建新的播放器和相关组件
+        // 创建新的播放器及相关组件
         player = AVPlayer(url: url)
         player.volume = volume
         setupTimeObserver()
         setupPlayerLayer()
         
-        // 【新增】切换视频源后确保 pipState 重置为 normal
+        // 确保切换后 pipState 重置为 normal
         pipState = .normal
 
-        // 开始播放
-        player.play()
-        playerState = .playing
+        // 延迟一段时间，让 currentItem 有时间加载 seekableTimeRanges
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self,
+                  let currentItem = self.player.currentItem,
+                  let timeRange = currentItem.seekableTimeRanges.last?.timeRangeValue else {
+                // 如果没有拿到 seekableTimeRanges，则直接播放
+                self?.player.play()
+                self?.playerState = .playing
+                return
+            }
+            // 计算最新位置：livePosition = range.start + range.duration
+            let livePosition = CMTimeAdd(timeRange.start, timeRange.duration)
+            self.player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                self.player.play()
+                self.playerState = .playing
+            }
+        }
     }
 
     private func cleanupResources() {
@@ -324,6 +369,12 @@ class PlayerContainerView: NSView {
         viewModel.$playerState
             .sink { [weak self] state in
                 self?.updateStatusLabel(for: state)
+            }
+            .store(in: &cancellables)
+
+        viewModel.$playerState
+            .sink { [weak self] state in
+                self?.updatePlayPauseButtonImage()
             }
             .store(in: &cancellables)
 
@@ -442,9 +493,9 @@ class PlayerContainerView: NSView {
     private func updatePipButtonImage() {
         // 当状态为 active 或 entering 时，均显示退出图标
         if viewModel.pipState == .active || viewModel.pipState == .entering {
-            pipButton.image = NSImage(systemSymbolName: "pip.exit", accessibilityDescription: "Exit PiP")
+            pipButton.image = AVPictureInPictureController.pictureInPictureButtonStopImage
         } else {
-            pipButton.image = NSImage(systemSymbolName: "pip.enter", accessibilityDescription: "Enter PiP")
+            pipButton.image = AVPictureInPictureController.pictureInPictureButtonStartImage
         }
         pipButton.contentTintColor = .white
     }
