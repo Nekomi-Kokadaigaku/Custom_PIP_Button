@@ -1,4 +1,12 @@
 //
+//  PlayerState.swift
+//  customPipDemo
+//
+//  Created by Iris on 2025-03-02.
+//
+
+
+//
 //  customPipDemoApp.swift
 //  customPipDemo
 //
@@ -378,6 +386,7 @@ class PlayerContainerView: NSView {
 
     @objc func seek(_ sender: NSObject) {
         let val = volumeSlider.cell?.floatValue
+        print("\(String(describing: val))")
     }
 
     // MARK: - 初始化控件
@@ -437,8 +446,8 @@ class PlayerContainerView: NSView {
         self.debugInfoTextField.stringValue += "\noriginRect.y: \(originRext.origin.y)"
         self.debugInfoTextField.stringValue += "\noriginRect.width: \(originRext.size.width)"
         self.debugInfoTextField.stringValue += "\noriginRect.height: \(originRext.size.height)"
-
-        self.debugInfoTextField.stringValue += "\nKnobRect.x: \(round(knobRect.origin.x))"
+        
+        self.debugInfoTextField.stringValue += "\nKnobRect.x: \(knobRect.origin.x)"
         self.debugInfoTextField.stringValue += "\nKnobRect.y: \(knobRect.origin.y)"
         self.debugInfoTextField.stringValue += "\nKnobRect.width: \(knobRect.size.width)"
         self.debugInfoTextField.stringValue += "\nKnobRect.height: \(knobRect.size.height)"
@@ -574,6 +583,7 @@ class PlayerContainerView: NSView {
                 volumeIcon.removeAllSymbolEffects()
                 volumeIcon.addSymbolEffect(.bounce)
                 volumeIcon.frame.size = NSSize(width: 25, height: 25)
+                print(clampedVolume,"bounce")
                 last = .fromOne
             } else if clampedVolume == 0 {
                 let image = NSImage(systemSymbolName: "speaker.slash.fill",
@@ -583,6 +593,7 @@ class PlayerContainerView: NSView {
                 volumeIcon.removeAllSymbolEffects()
                 volumeIcon.setSymbolImage(image, contentTransition: .replace.upUp)
                 volumeIcon.frame.size = NSSize(width: 25, height: 25)
+                print(clampedVolume,"replace")
                 last = .fromZero
             } else {
                 let image = NSImage(systemSymbolName: "speaker.wave.3.fill",
@@ -595,6 +606,7 @@ class PlayerContainerView: NSView {
                     volumeIcon.setSymbolImage(image, contentTransition: .replace)
                 }
                 volumeIcon.frame.size = NSSize(width: 25, height: 25)
+                print(clampedVolume,"nil")
                 last = .notZero
             }
         } else {
@@ -719,6 +731,7 @@ class PlayerContainerView: NSView {
 
     @objc private func volumeChanged() {
         viewModel.volume = Float(volumeSlider.doubleValue)
+        print("vlvl\(viewModel.volume)")
     }
 
     // 如果外部（比如 SwiftUI 包装）需要更新图层，可调用此方法
@@ -770,11 +783,14 @@ struct CustomPlayerView: NSViewRepresentable {
 struct ContentView: View {
     @StateObject private var viewModel = PlayerViewModel()
     @State var m3u8Link: String = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
+    @State var knobPos: CGFloat = 1 // 新增：用于存储 knobPos
 
     var body: some View {
         VStack {
             CustomPlayerView(viewModel: viewModel)
                 .frame(width: 640, height: 360)
+
+            Text("当前 Knob 位置: \(knobPos)") // 显示 knobPos 的值
 
             TextField("请输入视频 URL", text: $m3u8Link)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -811,113 +827,100 @@ extension NSTextView {
 // Thanks to [https://stackoverflow.com/questions/71337289/nsslider-custom-subclass-how-to-maintain-the-link-between-the-knob-position-an]
 class SeekSliderCell: NSSliderCell {
 
-    override var knobThickness: CGFloat {
-      return knobWidth
-    }
-
-    let knobWidth: CGFloat = 3
-    let knobHeight: CGFloat = 15
-    let knobRadius: CGFloat = 1
-    let barRadius: CGFloat = 1.5
-
-    private var knobColor = NSColor(named: .mainSliderKnob)!
-    private var knobActiveColor = NSColor(named: .mainSliderKnobActive)!
-    private var barColorLeft = NSColor(named: .mainSliderBarLeft)!
-    private var barColorRight = NSColor(named: .mainSliderBarRight)!
-
     override func drawKnob(_ knobRect: NSRect) {
-        drawKnobOnly(knobRect: knobRect)
-    }
-
-    @discardableResult
-    private func drawKnobOnly(knobRect: NSRect) -> NSBezierPath {
-        // Round the X position for cleaner drawing
-        let rect = NSMakeRect(round(knobRect.origin.x),
-                              knobRect.origin.y + 0.5 * (knobRect.height - knobHeight),
-                              knobRect.width,
-                              knobHeight)
-
-        let path = NSBezierPath(roundedRect: rect, xRadius: knobRadius, yRadius: knobRadius)
-        (isHighlighted ? knobActiveColor : knobColor).setFill()
-        path.fill()
-        return path
-    }
-
-    override func knobRect(flipped: Bool) -> NSRect {
-        let slider = self.controlView as! NSSlider
-        let barRect = barRect(flipped: flipped)
-        let percentage = slider.doubleValue / (slider.maxValue - slider.minValue)
-        // The usable width of the bar is reduced by the width of the knob.
-        let effectiveBarWidth = barRect.width - knobWidth
-        let pos = barRect.origin.x + CGFloat(percentage) * effectiveBarWidth
-        let rect = super.knobRect(flipped: flipped)
-
-        let height: CGFloat
-        if #available(macOS 11, *) {
-            height = (barRect.origin.y - rect.origin.y) * 2 + barRect.height
-        } else {
-            height = rect.height
-        }
-        return NSMakeRect(pos, rect.origin.y, knobWidth, height)
+        var frame = NSRect(x: 0.0, y: 0.0, width: 0.5, height: 28.0)
+        frame.origin.x = knobRect.origin.x + 12
+        frame.origin.y = 0
+        NSColor.white.setFill()
+        NSBezierPath.init(roundedRect: frame, xRadius: 3, yRadius: 3).fill()
     }
 
     var knobPositionUpdateHandler: ((NSRect, NSRect, NSRect) -> Void)?
+    let knobWidth: CGFloat = 3
+    let knobHeight: CGFloat = 15
+    let knobRadius: CGFloat = 1
+    let barRadius: CGFloat = 5
 
+    private var barColorLeft = NSColor(named: .mainSliderBarLeft)!
+    private var barColorRight = NSColor(named: .mainSliderBarRight)!
+    
     override func drawBar(inside rect: NSRect, flipped: Bool) {
+
+//        let slider = self.controlView as! NSSlider
+
         /// The position of the knob, rounded for cleaner drawing
         let knobPos: CGFloat = round(knobRect(flipped: flipped).origin.x)
 
         /// How far progressed the current video is, used for drawing the bar background
         var progress: CGFloat = 0
+        
+        let cursorPos = knobRect(flipped: flipped).origin.x + 12
 
-        progress = knobPos
+        progress = knobPos * 10 / 8
 
         NSGraphicsContext.saveGraphicsState()
-        let barRect: NSRect
+        var barRect: NSRect
         if #available(macOS 11, *) {
             barRect = rect
+            barRect.size.height = 10
         } else {
             barRect = NSMakeRect(rect.origin.x, rect.origin.y + 1, rect.width, rect.height - 2)
         }
         let path = NSBezierPath(roundedRect: barRect, xRadius: barRadius, yRadius: barRadius)
+        NSColor.yellow.setFill()
+        path.fill()
+        
+        var visibleRect: NSRect = NSMakeRect(
+            12,
+            10,
+            80,
+            barRadius * 2
+        )
+        NSBezierPath(roundedRect: visibleRect, xRadius: barRadius, yRadius: barRadius).addClip()
+        NSColor.green.setFill()
+        path.fill()
+        NSGraphicsContext.restoreGraphicsState()
 
         // draw left
-        let pathLeftRect: NSRect = NSMakeRect(barRect.origin.x, barRect.origin.y, progress, barRect.height)
-        NSBezierPath(rect: pathLeftRect).addClip()
-
-        // if dark mode use marco
-        // Clip 1px around the knob
-        path.append(NSBezierPath(rect: NSRect(x: knobPos - 1, y: barRect.origin.y, width: knobWidth + 2, height: barRect.height)).reversed)
-
-
-        barColorLeft.setFill()
-        path.fill()
-        NSGraphicsContext.restoreGraphicsState()
-
-        // draw right
-        NSGraphicsContext.saveGraphicsState()
-        let pathRight = NSMakeRect(barRect.origin.x + progress, barRect.origin.y, barRect.width - progress, barRect.height)
-        NSBezierPath(rect: pathRight).setClip()
-        barColorRight.setFill()
-        path.fill()
-        NSGraphicsContext.restoreGraphicsState()
+//        NSGraphicsContext.saveGraphicsState()
+//        let pathLeftRect: NSRect = NSMakeRect(
+//            12,
+//            barRect.origin.y,
+//            cursorPos - 12,
+//            barRadius * 2
+//        )
+//        NSBezierPath(rect: pathLeftRect).addClip()
+//        barColorLeft.setFill()
+//        path.fill()
+//        NSGraphicsContext.restoreGraphicsState()
+//
+//        // draw right
+//        NSGraphicsContext.saveGraphicsState()
+//        let pathRight = NSMakeRect(
+//            cursorPos,
+//            barRect.origin.y,
+//            90 - cursorPos,
+//            barRadius * 2
+//        )
+//        NSBezierPath(rect: pathRight).setClip()
+//        barColorRight.setFill()
+//        path.fill()
+//        NSGraphicsContext.restoreGraphicsState()
 
         // draw chapters
         NSGraphicsContext.saveGraphicsState()
-        if false {
-            // When streaming if the audio stream is changed mpv will momentarily reset the video duration
-            // to zero. Not useful to draw the chapter marks when the duration is unknown.
-            
-        }
+        
         NSGraphicsContext.restoreGraphicsState()
         
-        knobPositionUpdateHandler?(rect, knobRect(flipped: flipped), barRect)
+        knobPositionUpdateHandler?(
+            rect,
+            knobRect(flipped: flipped),
+            barRect
+        ) // 调用闭包传递值
     }
 }
 
 extension NSColor.Name {
-    static let mainSliderKnob = NSColor.Name("MainSliderKnob")
-    static let mainSliderKnobActive = NSColor.Name("MainSliderKnobActive")
     static let mainSliderBarLeft = NSColor.Name("MainSliderBarLeft")
     static let mainSliderBarRight = NSColor.Name("MainSliderBarRight")
 }

@@ -9,6 +9,7 @@
 import AVKit
 import SwiftUI
 import Combine
+import Symbols  // 确保引入 Symbols 框架以使用 symbolEffect API
 
 // MARK: - 播放器状态定义
 enum PlayerState: Equatable {
@@ -40,10 +41,6 @@ enum BackgroundState {
     case hidden, transient, locked
 }
 
-enum aState {
-    case fromOne, fromZero, notZero
-}
-
 // MARK: - 播放器视图模型
 class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerDelegate {
     @Published private(set) var playerState: PlayerState = .idle
@@ -53,17 +50,22 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     @Published var playerLayer: AVPlayerLayer!
     @Published var pipController: AVPictureInPictureController!
 
-    // 音量属性的封装：通过 getter/setter 统一读写 UserDefaults
+    // 音量属性封装，通过 getter/setter 统一读写 UserDefaults
     @Published var volume: Float {
         didSet {
+            // 当音量不为 0 时，记录上一次的非 0 音量
+            if volume > 0 {
+                lastNonZeroVolume = volume
+            }
             player.volume = volume
             saveVolume(volume)
         }
     }
+    // 保存上一次非 0 的音量
+    private var lastNonZeroVolume: Float = 1.0
+    var lastNonZero: Float { lastNonZeroVolume }
 
-    @Published var tKnobPosition: CGFloat = 0
-
-    // 新增：可外部修改的标题
+    // 合并后的标题与状态文本
     @Published var videoTitle: String = ""
 
     static var shared = PlayerViewModel()
@@ -72,7 +74,6 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     private var cancellables = Set<AnyCancellable>()
 
     override init() {
-        // 封装读取音量值
         self.volume = PlayerViewModel.loadVolume() ?? 1.0
         super.init()
 
@@ -91,7 +92,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         setupPlayerLayer()
     }
 
-    // MARK: - 封装 UserDefaults 读写
+    // MARK: - UserDefaults 读写
     private static func loadVolume() -> Float? {
         return UserDefaults.standard.object(forKey: "playerVolume") as? Float
     }
@@ -99,7 +100,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         UserDefaults.standard.set(volume, forKey: "playerVolume")
     }
 
-    // MARK: - 添加周期性时间观察者
+    // MARK: - 周期性时间观察者
     private func setupTimeObserver() {
         if let observer = playerTimeObserver {
             player.removeTimeObserver(observer)
@@ -111,7 +112,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         }
     }
 
-    // MARK: - 初始化播放器图层与 PiP 控制器
+    // MARK: - 播放器图层与 PiP 控制器初始化
     private func setupPlayerLayer() {
         playerLayer = AVPlayerLayer(player: player)
         pipController = AVPictureInPictureController(playerLayer: playerLayer)
@@ -137,7 +138,6 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     func play() {
         if playerState == .paused || playerState == .idle {
             if let currentItem = player.currentItem, currentItem.duration.isIndefinite {
-                // 优化：不使用固定延时，而是检测是否有有效的 seekableTimeRanges
                 if let timeRange = currentItem.seekableTimeRanges.last?.timeRangeValue {
                     let livePosition = CMTimeAdd(timeRange.start, timeRange.duration)
                     player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
@@ -181,7 +181,8 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         pipState = .normal
     }
 
-    func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+    func pictureInPictureController(_ controller: AVPictureInPictureController,
+                                    failedToStartPictureInPictureWithError error: Error) {
         pipState = .normal
         playerState = .error(error)
     }
@@ -212,15 +213,11 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
     private func performVideoSourceSwitch(url: URL) {
         cleanupResources()
-
-        // 创建新播放器及相关组件
         player = AVPlayer(url: url)
         player.volume = volume
         setupTimeObserver()
         setupPlayerLayer()
         pipState = .normal
-
-        // 优化：使用延迟判断 seekableTimeRanges 是否有效
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self,
                   let currentItem = self.player.currentItem,
@@ -266,20 +263,16 @@ class PlayerContainerView: NSView {
         didSet {
             oldValue?.removeFromSuperlayer()
             if let newLayer = playerLayer {
-                // 将播放器图层放在最底层
                 self.layer?.insertSublayer(newLayer, at: 0)
                 newLayer.frame = self.bounds
             }
         }
     }
 
-    // 合并后的单一文本控件，用来显示「标题 or 状态」
+    // 合并后的 infoLabel（显示标题和状态）
     private var infoLabel: NSTextField!
 
-    private var debugInfoTextField: NSTextField!
-
     private var volumeIcon: NSImageView!
-    private var volumeButton: NSButton!
     private var volumeSlider: NSSlider!
     private var playPauseButton: NSButton!
     private var pipButton: NSButton!
@@ -290,7 +283,6 @@ class PlayerContainerView: NSView {
 
     private var backgroundState: BackgroundState = .hidden
     private var autoHideTimer: Timer?
-    private var last: aState = .notZero
 
     // 自动隐藏延时
     private var autoHideDelay: TimeInterval {
@@ -322,33 +314,10 @@ class PlayerContainerView: NSView {
         setupControls()
         setupConstraints()
         bindViewModel()
-
-        seekSliderCell = SeekSliderCell()
-
-        setupDebugInfoTextField()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupDebugInfoTextField() {
-        // add a round rect as background color yellow
-        debugInfoTextField = NSTextField(labelWithString: "Knob Position: ")
-        debugInfoTextField.font = NSFont.systemFont(ofSize: 10, weight: .medium)
-        debugInfoTextField.textColor = .white
-        debugInfoTextField.wantsLayer = true
-        debugInfoTextField.layer?.cornerRadius = 4
-        debugInfoTextField.layer?.masksToBounds = true
-        debugInfoTextField.layer?.backgroundColor = NSColor.gray.cgColor
-        debugInfoTextField.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(debugInfoTextField)
-
-        // 添加约束以定位标签,右上角距离边缘各40px
-        NSLayoutConstraint.activate([
-            debugInfoTextField.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 20),
-            debugInfoTextField.topAnchor.constraint(equalTo: self.topAnchor, constant: 20)
-        ])
     }
 
     // MARK: - 播放器图层设置
@@ -374,15 +343,9 @@ class PlayerContainerView: NSView {
         addSubview(controlsBackgroundView)
     }
 
-     var seekSliderCell = SeekSliderCell()
-
-    @objc func seek(_ sender: NSObject) {
-        let val = volumeSlider.cell?.floatValue
-    }
-
     // MARK: - 初始化控件
     private func setupControls() {
-        // infoLabel：同时显示标题或状态
+        // infoLabel：合并显示标题与状态
         infoLabel = NSTextField(labelWithString: "未开始播放")
         infoLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
         infoLabel.textColor = .white
@@ -390,11 +353,14 @@ class PlayerContainerView: NSView {
         infoLabel.translatesAutoresizingMaskIntoConstraints = false
         controlsBackgroundView.addSubview(infoLabel)
 
-        // 音量图标
+        // 音量图标：使用 NSImageView，添加点击手势以实现静音/恢复
         volumeIcon = NSImageView()
-        volumeIcon.imageScaling = .scaleProportionallyDown
+        volumeIcon.imageScaling = .scaleProportionallyUpOrDown
         volumeIcon.translatesAutoresizingMaskIntoConstraints = false
         controlsBackgroundView.addSubview(volumeIcon)
+        let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(volumeIconClicked))
+        volumeIcon.addGestureRecognizer(clickGesture)
+        volumeIcon.wantsLayer = true
 
         // 音量滑块
         volumeSlider = NSSlider(value: Double(viewModel.volume),
@@ -403,12 +369,6 @@ class PlayerContainerView: NSView {
                                 target: self,
                                 action: #selector(volumeChanged))
         volumeSlider.translatesAutoresizingMaskIntoConstraints = false
-        volumeSlider.cell = SeekSliderCell()
-        volumeSlider.cell?.target = self
-        volumeSlider.cell?.action = #selector(volumeChanged)
-        (volumeSlider.cell as? SeekSliderCell)?.knobPositionUpdateHandler = { [weak self] originRect, knobRect, barRect in
-            self?.updateDebugInfo(originRect, knobRect, barRect)
-        }
         controlsBackgroundView.addSubview(volumeSlider)
 
         // 播放/暂停按钮
@@ -422,36 +382,14 @@ class PlayerContainerView: NSView {
         // 画中画按钮
         pipButton = NSButton(title: "", target: self, action: #selector(togglePip))
         pipButton.isBordered = false
-        pipButton.imageScaling = .scaleProportionallyDown
+        pipButton.imageScaling = .scaleProportionallyUpOrDown
         pipButton.translatesAutoresizingMaskIntoConstraints = false
         updatePipButtonImage()
         controlsBackgroundView.addSubview(pipButton)
     }
 
-    private func updateDebugInfo(
-        _ originRext: NSRect,
-        _ knobRect: NSRect,
-        _ barRect: NSRect
-    ) {
-        self.debugInfoTextField.stringValue = "originRect.x: \(originRext.origin.x)"
-        self.debugInfoTextField.stringValue += "\noriginRect.y: \(originRext.origin.y)"
-        self.debugInfoTextField.stringValue += "\noriginRect.width: \(originRext.size.width)"
-        self.debugInfoTextField.stringValue += "\noriginRect.height: \(originRext.size.height)"
-
-        self.debugInfoTextField.stringValue += "\nKnobRect.x: \(round(knobRect.origin.x))"
-        self.debugInfoTextField.stringValue += "\nKnobRect.y: \(knobRect.origin.y)"
-        self.debugInfoTextField.stringValue += "\nKnobRect.width: \(knobRect.size.width)"
-        self.debugInfoTextField.stringValue += "\nKnobRect.height: \(knobRect.size.height)"
-
-        self.debugInfoTextField.stringValue += "\nbarRect.x: \(barRect.origin.x)"
-        self.debugInfoTextField.stringValue += "\nbarRect.y: \(barRect.origin.y)"
-        self.debugInfoTextField.stringValue += "\nbarRect.width: \(barRect.size.width)"
-        self.debugInfoTextField.stringValue += "\nbarRect.height: \(barRect.size.height)"
-    }
-
     // MARK: - 添加 Auto Layout 约束
     private func setupConstraints() {
-        // 让背景更扁平一些：比如 420 宽、80 高，位于视图底部或居中
         NSLayoutConstraint.activate([
             controlsBackgroundView.centerXAnchor.constraint(equalTo: self.centerXAnchor),
             controlsBackgroundView.bottomAnchor.constraint(equalTo: self.bottomAnchor, constant: -20),
@@ -459,7 +397,6 @@ class PlayerContainerView: NSView {
             controlsBackgroundView.heightAnchor.constraint(equalToConstant: 80)
         ])
 
-        // 播放按钮（示例居中靠上）
         NSLayoutConstraint.activate([
             playPauseButton.centerXAnchor.constraint(equalTo: controlsBackgroundView.centerXAnchor),
             playPauseButton.centerYAnchor.constraint(equalTo: controlsBackgroundView.centerYAnchor, constant: -8),
@@ -467,27 +404,24 @@ class PlayerContainerView: NSView {
             playPauseButton.heightAnchor.constraint(equalToConstant: buttonSize),
         ])
 
-        // 音量图标和滑块放在左侧，与播放按钮同一水平线
         NSLayoutConstraint.activate([
             volumeIcon.centerYAnchor.constraint(equalTo: playPauseButton.centerYAnchor),
             volumeIcon.leadingAnchor.constraint(equalTo: controlsBackgroundView.leadingAnchor, constant: 16),
-            volumeIcon.widthAnchor.constraint(equalToConstant: 32),
-            volumeIcon.heightAnchor.constraint(equalToConstant: 32),
+            volumeIcon.widthAnchor.constraint(equalToConstant: 24),
+            volumeIcon.heightAnchor.constraint(equalToConstant: 24),
 
             volumeSlider.centerYAnchor.constraint(equalTo: volumeIcon.centerYAnchor),
             volumeSlider.leadingAnchor.constraint(equalTo: volumeIcon.trailingAnchor, constant: 8),
             volumeSlider.widthAnchor.constraint(equalToConstant: 100)
         ])
 
-        // PiP 按钮放右侧，与播放按钮同一水平线
         NSLayoutConstraint.activate([
             pipButton.centerYAnchor.constraint(equalTo: playPauseButton.centerYAnchor),
             pipButton.trailingAnchor.constraint(equalTo: controlsBackgroundView.trailingAnchor, constant: -16),
-            pipButton.widthAnchor.constraint(equalToConstant: 32),
-            pipButton.heightAnchor.constraint(equalToConstant: 32)
+            pipButton.widthAnchor.constraint(equalToConstant: 24),
+            pipButton.heightAnchor.constraint(equalToConstant: 24)
         ])
 
-        // infoLabel 放在播放按钮正下方，居中
         NSLayoutConstraint.activate([
             infoLabel.topAnchor.constraint(equalTo: playPauseButton.bottomAnchor, constant: 8),
             infoLabel.centerXAnchor.constraint(equalTo: playPauseButton.centerXAnchor)
@@ -496,7 +430,6 @@ class PlayerContainerView: NSView {
 
     // MARK: - 绑定 ViewModel
     private func bindViewModel() {
-        // 只要 playerState 或 videoTitle 有变化，就更新 infoLabel
         viewModel.$playerState
             .sink { [weak self] _ in
                 self?.updateInfoLabel()
@@ -510,14 +443,12 @@ class PlayerContainerView: NSView {
             }
             .store(in: &cancellables)
 
-        // 绑定音量
         viewModel.$volume
             .sink { [weak self] newVolume in
                 self?.updateVolumeIcon(for: newVolume)
             }
             .store(in: &cancellables)
 
-        // 绑定画中画状态
         viewModel.$pipState
             .sink { [weak self] _ in
                 self?.updatePipButtonImage()
@@ -525,16 +456,11 @@ class PlayerContainerView: NSView {
             .store(in: &cancellables)
     }
 
-    // MARK: - 更新 infoLabel 的显示逻辑
+    // MARK: - 更新 infoLabel 显示逻辑
     private func updateInfoLabel() {
         switch viewModel.playerState {
         case .playing:
-            // 如果有自定义标题，就显示标题，否则显示"正在播放"
-            if viewModel.videoTitle.isEmpty {
-                infoLabel.stringValue = "正在播放"
-            } else {
-                infoLabel.stringValue = viewModel.videoTitle
-            }
+            infoLabel.stringValue = viewModel.videoTitle.isEmpty ? "正在播放" : viewModel.videoTitle
         case .idle, .paused:
             infoLabel.stringValue = "未开始播放"
         case .loading:
@@ -562,49 +488,40 @@ class PlayerContainerView: NSView {
         pipButton.contentTintColor = .white
     }
 
+    // MARK: - 使用 symbolEffect 更新音量图标
     private func updateVolumeIcon(for volume: Float) {
         let clampedVolume = max(0, min(volume, 1))
-        if #available(macOS 13.0, *) {
-            if clampedVolume == 1 {
-                let image = NSImage(systemSymbolName: "speaker.wave.3.fill",
-                                    variableValue: Double(clampedVolume),
-                                    accessibilityDescription: nil)
-                volumeIcon.image = image
-                volumeIcon.contentTintColor = .white
-                volumeIcon.removeAllSymbolEffects()
-                volumeIcon.addSymbolEffect(.bounce)
-                volumeIcon.frame.size = NSSize(width: 25, height: 25)
-                last = .fromOne
-            } else if clampedVolume == 0 {
-                let image = NSImage(systemSymbolName: "speaker.slash.fill",
-                                    variableValue: Double(clampedVolume),
-                                    accessibilityDescription: nil)!
-                volumeIcon.contentTintColor = .white
-                volumeIcon.removeAllSymbolEffects()
-                volumeIcon.setSymbolImage(image, contentTransition: .replace.upUp)
-                volumeIcon.frame.size = NSSize(width: 25, height: 25)
-                last = .fromZero
-            } else {
-                let image = NSImage(systemSymbolName: "speaker.wave.3.fill",
-                                    variableValue: Double(clampedVolume),
-                                    accessibilityDescription: nil)!
-                volumeIcon.image = image
-                volumeIcon.contentTintColor = .white
-                volumeIcon.removeAllSymbolEffects()
-                if last == .fromZero {
-                    volumeIcon.setSymbolImage(image, contentTransition: .replace)
-                }
-                volumeIcon.frame.size = NSSize(width: 25, height: 25)
-                last = .notZero
-            }
+
+        if clampedVolume == 1.0 {
+            // 当音量达到最大时，设置为 speaker.wave.3.fill 并触发 Bounce 效果
+            let image = NSImage(systemSymbolName: "speaker.wave.3.fill", accessibilityDescription: nil)
+            volumeIcon.image = image
+            volumeIcon.contentTintColor = .white
+            // 使用 symbolEffect API 触发 Bounce 效果
+            volumeIcon.addSymbolEffect(.bounce)
+        } else if clampedVolume == 0 {
+            // 当音量为 0 时，用 Replace 动画替换为 speaker.slash.fill
+            let newImage = NSImage(systemSymbolName: "speaker.slash.fill", accessibilityDescription: nil)
+            volumeIcon.setSymbolImage(newImage, contentTransition: .replace)
+            volumeIcon.contentTintColor = .white
         } else {
-            volumeIcon.image = NSImage(systemSymbolName: "speaker.wave.3.fill",
-                                       accessibilityDescription: nil)
+            // 中间状态：直接显示 speaker.wave.3.fill，无额外动画
+            let image = NSImage(systemSymbolName: "speaker.wave.3.fill", accessibilityDescription: nil)
+            volumeIcon.image = image
             volumeIcon.contentTintColor = .white
         }
     }
 
-    // MARK: - 鼠标事件、背景显示与自动隐藏逻辑
+    // MARK: - 音量图标点击事件：静音/恢复
+    @objc private func volumeIconClicked() {
+        if viewModel.volume > 0 {
+            viewModel.volume = 0
+        } else {
+            viewModel.volume = viewModel.lastNonZero > 0 ? viewModel.lastNonZero : 1.0
+        }
+    }
+
+    // MARK: - 鼠标事件与背景自动隐藏逻辑
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let area = containerTrackingArea { removeTrackingArea(area) }
@@ -665,8 +582,8 @@ class PlayerContainerView: NSView {
             startAutoHideTimer()
         case (_, .locked):
             if oldState == .hidden { animateShowBackground() }
-//        default:
-//            break
+        default:
+            break
         }
     }
 
@@ -721,7 +638,7 @@ class PlayerContainerView: NSView {
         viewModel.volume = Float(volumeSlider.doubleValue)
     }
 
-    // 如果外部（比如 SwiftUI 包装）需要更新图层，可调用此方法
+    // 为了使播放器图层始终覆盖整个区域
     func updatePlayerLayer() {
         playerLayer?.removeFromSuperlayer()
         self.playerLayer = viewModel.playerLayer
@@ -731,14 +648,13 @@ class PlayerContainerView: NSView {
         }
     }
 
-    // 为了使播放器图层始终覆盖整个区域，重写 layout
     override func layout() {
         super.layout()
         playerLayer?.frame = self.bounds
     }
 }
 
-// MARK: - CALayer 动画扩展
+// MARK: - CALayer 动画扩展（保持原有封装）
 extension CALayer {
     func animateTransform(from: CATransform3D, to: CATransform3D, duration: CFTimeInterval) {
         let animation = CABasicAnimation(keyPath: "transform")
@@ -783,10 +699,8 @@ struct ContentView: View {
             HStack {
                 Button("切换视频源") {
                     viewModel.switchVideoSource(to: m3u8Link)
-                    viewModel.videoTitle = "夜不能寐吗"
                 }
                 Button("切换播放器标题") {
-                    // 设置一个新的标题，如果播放器正在播放，就会显示该标题，否则按照逻辑显示
                     viewModel.videoTitle = "新的直播间标题"
                 }
             }
@@ -806,118 +720,4 @@ extension NSTextView {
 
 #Preview {
     ContentView()
-}
-
-// Thanks to [https://stackoverflow.com/questions/71337289/nsslider-custom-subclass-how-to-maintain-the-link-between-the-knob-position-an]
-class SeekSliderCell: NSSliderCell {
-
-    override var knobThickness: CGFloat {
-      return knobWidth
-    }
-
-    let knobWidth: CGFloat = 3
-    let knobHeight: CGFloat = 15
-    let knobRadius: CGFloat = 1
-    let barRadius: CGFloat = 1.5
-
-    private var knobColor = NSColor(named: .mainSliderKnob)!
-    private var knobActiveColor = NSColor(named: .mainSliderKnobActive)!
-    private var barColorLeft = NSColor(named: .mainSliderBarLeft)!
-    private var barColorRight = NSColor(named: .mainSliderBarRight)!
-
-    override func drawKnob(_ knobRect: NSRect) {
-        drawKnobOnly(knobRect: knobRect)
-    }
-
-    @discardableResult
-    private func drawKnobOnly(knobRect: NSRect) -> NSBezierPath {
-        // Round the X position for cleaner drawing
-        let rect = NSMakeRect(round(knobRect.origin.x),
-                              knobRect.origin.y + 0.5 * (knobRect.height - knobHeight),
-                              knobRect.width,
-                              knobHeight)
-
-        let path = NSBezierPath(roundedRect: rect, xRadius: knobRadius, yRadius: knobRadius)
-        (isHighlighted ? knobActiveColor : knobColor).setFill()
-        path.fill()
-        return path
-    }
-
-    override func knobRect(flipped: Bool) -> NSRect {
-        let slider = self.controlView as! NSSlider
-        let barRect = barRect(flipped: flipped)
-        let percentage = slider.doubleValue / (slider.maxValue - slider.minValue)
-        // The usable width of the bar is reduced by the width of the knob.
-        let effectiveBarWidth = barRect.width - knobWidth
-        let pos = barRect.origin.x + CGFloat(percentage) * effectiveBarWidth
-        let rect = super.knobRect(flipped: flipped)
-
-        let height: CGFloat
-        if #available(macOS 11, *) {
-            height = (barRect.origin.y - rect.origin.y) * 2 + barRect.height
-        } else {
-            height = rect.height
-        }
-        return NSMakeRect(pos, rect.origin.y, knobWidth, height)
-    }
-
-    var knobPositionUpdateHandler: ((NSRect, NSRect, NSRect) -> Void)?
-
-    override func drawBar(inside rect: NSRect, flipped: Bool) {
-        /// The position of the knob, rounded for cleaner drawing
-        let knobPos: CGFloat = round(knobRect(flipped: flipped).origin.x)
-
-        /// How far progressed the current video is, used for drawing the bar background
-        var progress: CGFloat = 0
-
-        progress = knobPos
-
-        NSGraphicsContext.saveGraphicsState()
-        let barRect: NSRect
-        if #available(macOS 11, *) {
-            barRect = rect
-        } else {
-            barRect = NSMakeRect(rect.origin.x, rect.origin.y + 1, rect.width, rect.height - 2)
-        }
-        let path = NSBezierPath(roundedRect: barRect, xRadius: barRadius, yRadius: barRadius)
-
-        // draw left
-        let pathLeftRect: NSRect = NSMakeRect(barRect.origin.x, barRect.origin.y, progress, barRect.height)
-        NSBezierPath(rect: pathLeftRect).addClip()
-
-        // if dark mode use marco
-        // Clip 1px around the knob
-        path.append(NSBezierPath(rect: NSRect(x: knobPos - 1, y: barRect.origin.y, width: knobWidth + 2, height: barRect.height)).reversed)
-
-
-        barColorLeft.setFill()
-        path.fill()
-        NSGraphicsContext.restoreGraphicsState()
-
-        // draw right
-        NSGraphicsContext.saveGraphicsState()
-        let pathRight = NSMakeRect(barRect.origin.x + progress, barRect.origin.y, barRect.width - progress, barRect.height)
-        NSBezierPath(rect: pathRight).setClip()
-        barColorRight.setFill()
-        path.fill()
-        NSGraphicsContext.restoreGraphicsState()
-
-        // draw chapters
-        NSGraphicsContext.saveGraphicsState()
-        if false {
-            // When streaming if the audio stream is changed mpv will momentarily reset the video duration
-            // to zero. Not useful to draw the chapter marks when the duration is unknown.
-            
-        }
-        NSGraphicsContext.restoreGraphicsState()
-        
-        knobPositionUpdateHandler?(rect, knobRect(flipped: flipped), barRect)
-    }
-}
-
-extension NSColor.Name {
-    static let mainSliderKnob = NSColor.Name("MainSliderKnob")
-    static let mainSliderKnobActive = NSColor.Name("MainSliderKnobActive")
-    static let mainSliderBarLeft = NSColor.Name("MainSliderBarLeft")
-    static let mainSliderBarRight = NSColor.Name("MainSliderBarRight")
 }

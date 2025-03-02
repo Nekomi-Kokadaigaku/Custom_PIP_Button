@@ -10,9 +10,23 @@
 		038329072D61DE7A0035A0C3 /* customPipDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = customPipDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		035E86FD2D739611007A192D /* Exceptions for "customPipDemo" folder in "customPipDemo" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				a.swift,
+				PlayerState.swift,
+			);
+			target = 038329062D61DE7A0035A0C3 /* customPipDemo */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		038329092D61DE7A0035A0C3 /* customPipDemo */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				035E86FD2D739611007A192D /* Exceptions for "customPipDemo" folder in "customPipDemo" target */,
+			);
 			path = customPipDemo;
 			sourceTree = "<group>";
 		};
