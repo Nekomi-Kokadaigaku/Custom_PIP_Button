@@ -7,8 +7,6 @@
 
 import SwiftUI
 
-
-// MARK: - Usage
 @main
 struct MyApp: App {
 
