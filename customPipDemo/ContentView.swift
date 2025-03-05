@@ -11,9 +11,11 @@ import SwiftUI
 struct CustomPlayerView: NSViewRepresentable {
     @ObservedObject var viewModel: PlayerViewModel
     func makeNSView(context: Context) -> NSView {
+        print("make NSView")
         return PlayerContainerView(frame: .zero, viewModel: viewModel)
     }
     func updateNSView(_ nsView: NSView, context: Context) {
+        print("update NSView")
         if let containerView = nsView as? PlayerContainerView {
             containerView.updatePlayerLayer()
         }
@@ -28,9 +30,13 @@ struct ContentView: View {
     var body: some View {
         VStack {
             CustomPlayerView(viewModel: viewModel)
-                .frame(width: 640, height: 360)
+                .frame(width: 800, height: 450)
             
             TextField("请输入视频 URL", text: $m3u8Link)
+                .onSubmit {
+                    viewModel.switchVideoSource(to: m3u8Link)
+                    viewModel.videoTitle = "This new stream title."
+                }
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding([.leading, .trailing])
             

@@ -52,30 +52,11 @@ class PlayerContainerView: NSView {
     private var autoHideTimer: Timer?
     private var previousVolumeState: VolumeTransitionState = .notZero
 
-    // 自动隐藏延时
-    private var autoHideDelay: TimeInterval {
-        didSet {
-            UserDefaults.standard.set(autoHideDelay, forKey: "AutoHideDelayKey")
-        }
-    }
-
-    // 常量配置
-    private let buttonSize: CGFloat = 32
-    private let controlsBackgroundCornerRadius: CGFloat = 12
-
     private var cancellables = Set<AnyCancellable>()
-
-    // 自定义滑块单元
-    var seekSliderCell = SeekSliderCell()
 
     // MARK: - 初始化
     init(frame frameRect: NSRect, viewModel: PlayerViewModel) {
         self.viewModel = viewModel
-        if let savedDelay = UserDefaults.standard.object(forKey: "AutoHideDelayKey") as? TimeInterval {
-            self.autoHideDelay = savedDelay
-        } else {
-            self.autoHideDelay = 3.0
-        }
         super.init(frame: frameRect)
         wantsLayer = true
         setupPlayerLayer()
@@ -98,12 +79,13 @@ class PlayerContainerView: NSView {
         debugInfoTextField.layer?.cornerRadius = 4
         debugInfoTextField.layer?.masksToBounds = true
         debugInfoTextField.layer?.backgroundColor = NSColor.gray.cgColor
+        debugInfoTextField.layer?.opacity = 0.5
         debugInfoTextField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(debugInfoTextField)
 
         NSLayoutConstraint.activate([
-            debugInfoTextField.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 20),
-            debugInfoTextField.topAnchor.constraint(equalTo: self.topAnchor, constant: 20)
+            debugInfoTextField.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 5),
+            debugInfoTextField.topAnchor.constraint(equalTo: self.topAnchor, constant: 5)
         ])
     }
 
@@ -111,6 +93,7 @@ class PlayerContainerView: NSView {
     private func setupPlayerLayer() {
         if layer == nil { wantsLayer = true }
         self.playerLayer = viewModel.playerLayer
+        self.playerLayer?.videoGravity = .resizeAspectFill
     }
 
     // MARK: - 控件背景设置
@@ -120,7 +103,7 @@ class PlayerContainerView: NSView {
         controlsBackgroundView.blendingMode = .withinWindow
         controlsBackgroundView.state = .active
         controlsBackgroundView.wantsLayer = true
-        controlsBackgroundView.layer?.cornerRadius = controlsBackgroundCornerRadius
+        controlsBackgroundView.layer?.cornerRadius = viewModel.controlsBackgroundCornerRadius
         controlsBackgroundView.layer?.masksToBounds = true
         controlsBackgroundView.alphaValue = 0.0
         controlsBackgroundView.layer?.transform = CATransform3DMakeScale(0.8, 0.8, 1.0)
@@ -193,6 +176,7 @@ class PlayerContainerView: NSView {
         info += "\nbarRect.y: \(barRect.origin.y)"
         info += "\nbarRect.width: \(barRect.size.width)"
         info += "\nbarRect.height: \(barRect.size.height)"
+        info += "\nisPIP Supported: \(viewModel.isPipSupported)"
         debugInfoTextField.stringValue = info
     }
 
@@ -208,8 +192,8 @@ class PlayerContainerView: NSView {
         NSLayoutConstraint.activate([
             playPauseButton.centerXAnchor.constraint(equalTo: controlsBackgroundView.centerXAnchor),
             playPauseButton.centerYAnchor.constraint(equalTo: controlsBackgroundView.centerYAnchor, constant: -8),
-            playPauseButton.widthAnchor.constraint(equalToConstant: buttonSize),
-            playPauseButton.heightAnchor.constraint(equalToConstant: buttonSize)
+            playPauseButton.widthAnchor.constraint(equalToConstant: viewModel.buttonSize),
+            playPauseButton.heightAnchor.constraint(equalToConstant: viewModel.buttonSize)
         ])
 
         NSLayoutConstraint.activate([
@@ -399,17 +383,20 @@ class PlayerContainerView: NSView {
             startAutoHideTimer()
         case (_, .locked):
             if oldState == .hidden { animateShowBackground() }
-        default:
-            break
         }
     }
 
     private func animateShowBackground() {
         let duration: CFTimeInterval = 0.3
+
+        // 通过扩展方法来设置 anchorPoint，而不会移动背景视图
+        controlsBackgroundView.layer?.setAnchorPointWithoutMoving(CGPoint(x: 0.5, y: 0.5))
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             controlsBackgroundView.animator().alphaValue = 1.0
+
             let fromTransform = CATransform3DMakeScale(0.95, 0.95, 1.0)
             let toTransform = CATransform3DIdentity
             controlsBackgroundView.layer?.animateTransform(from: fromTransform, to: toTransform, duration: duration)
@@ -418,18 +405,28 @@ class PlayerContainerView: NSView {
 
     private func animateHideBackground() {
         let duration: CFTimeInterval = 0.3
+
+        controlsBackgroundView.layer?.setAnchorPointWithoutMoving(CGPoint(x: 0.5, y: 0.5))
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             controlsBackgroundView.animator().alphaValue = 0.0
-            let toTransform = CATransform3DMakeScale(0.95, 0.95, 1.0)
+
             let currentTransform = controlsBackgroundView.layer?.transform ?? CATransform3DIdentity
+            let toTransform = CATransform3DMakeScale(0.95, 0.95, 1.0)
             controlsBackgroundView.layer?.animateTransform(from: currentTransform, to: toTransform, duration: duration)
         }
     }
 
     private func startAutoHideTimer() {
-        autoHideTimer = Timer.scheduledTimer(timeInterval: autoHideDelay, target: self, selector: #selector(autoHideTimerFired), userInfo: nil, repeats: false)
+        autoHideTimer = Timer.scheduledTimer(
+            timeInterval: viewModel.autoHideDelay,
+            target: self,
+            selector: #selector(autoHideTimerFired),
+            userInfo: nil,
+            repeats: false
+        )
     }
 
     @objc private func autoHideTimerFired() {
@@ -454,7 +451,7 @@ class PlayerContainerView: NSView {
     @objc private func volumeChanged() {
         viewModel.volume = Float(volumeSlider.doubleValue)
     }
-    
+
     // MARK: - 音量图标点击事件：静音/恢复
     @objc private func volumeIconClicked() {
 //        if viewModel.volume > 0 {
