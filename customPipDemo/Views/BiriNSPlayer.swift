@@ -1,8 +1,6 @@
 //
-//  PlayerContainerView.swift
+//  BiriNSPlayer.swift
 //  customPipDemo
-//
-//  Created by Iris on 2025-03-04.
 //
 
 import AppKit
@@ -15,15 +13,16 @@ enum BackgroundState {
     case hidden, transient, locked
 }
 
-// MARK: - 音量状态（原 aState 重命名）
+// MARK: - 音量状态
 enum VolumeTransitionState {
     case fromOne, fromZero, notZero
 }
 
 // MARK: - 自定义播放器容器视图
-class PlayerContainerView: NSView {
+class BiriNSPlayer: NSView {
 
     var viewModel: PlayerViewModel
+
     var playerLayer: AVPlayerLayer? {
         didSet {
             oldValue?.removeFromSuperlayer()
@@ -58,6 +57,7 @@ class PlayerContainerView: NSView {
     init(frame frameRect: NSRect, viewModel: PlayerViewModel) {
         self.viewModel = viewModel
         super.init(frame: frameRect)
+        self.viewModel.setOutterFrame(self.bounds)
         wantsLayer = true
         setupPlayerLayer()
         setupControlsBackground()
@@ -79,7 +79,7 @@ class PlayerContainerView: NSView {
         debugInfoTextField.layer?.cornerRadius = 4
         debugInfoTextField.layer?.masksToBounds = true
         debugInfoTextField.layer?.backgroundColor = NSColor.gray.cgColor
-        debugInfoTextField.layer?.opacity = 0.5
+        debugInfoTextField.layer?.opacity = 0.8
         debugInfoTextField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(debugInfoTextField)
 
@@ -128,7 +128,7 @@ class PlayerContainerView: NSView {
         controlsBackgroundView.addSubview(volumeIcon)
 
         // 音量滑块
-        volumeSlider = NSSlider(value: Double(viewModel.volume),
+        volumeSlider = NSSlider(value: Double(viewModel.volumePlayer),
                                 minValue: 0.0,
                                 maxValue: 1.0,
                                 target: self,
@@ -234,12 +234,12 @@ class PlayerContainerView: NSView {
                 self?.updateInfoLabel()
             }
             .store(in: &cancellables)
-
-        viewModel.$volume
-            .sink { [weak self] newVolume in
-                self?.updateVolumeIcon(for: newVolume)
-            }
-            .store(in: &cancellables)
+        // FIXME: - 修复音量调节
+//        viewModel.$volumePlayer
+//            .sink { [weak self] newVolume in
+//                self?.updateVolumeIcon(for: newVolume)
+//            }
+//            .store(in: &cancellables)
 
         viewModel.$pipState
             .sink { [weak self] _ in
@@ -449,16 +449,17 @@ class PlayerContainerView: NSView {
     }
 
     @objc private func volumeChanged() {
-        viewModel.volume = Float(volumeSlider.doubleValue)
+        // FIXME: - 修复音量调节
+        // viewModel.volume = Float(volumeSlider.doubleValue)
     }
 
     // MARK: - 音量图标点击事件：静音/恢复
     @objc private func volumeIconClicked() {
-//        if viewModel.volume > 0 {
-//            viewModel.volume = 0
-//        } else {
-//            viewModel.volume = viewModel.lastNonZero > 0 ? viewModel.lastNonZero : 1.0
-//        }
+        // if viewModel.volume > 0 {
+        //     viewModel.volume = 0
+        // } else {
+        //     viewModel.volume = viewModel.lastNonZero > 0 ? viewModel.lastNonZero : 1.0
+        // }
     }
 
     // 外部调用以更新播放器图层
@@ -474,5 +475,26 @@ class PlayerContainerView: NSView {
     override func layout() {
         super.layout()
         playerLayer?.frame = self.bounds
+    }
+}
+
+
+struct BiriPlayer: NSViewRepresentable {
+    
+    let viewModel = PlayerViewModel.shared
+    
+    func makeNSView(
+        context: Context
+    ) -> NSView {
+        return BiriNSPlayer(frame: .zero, viewModel: viewModel)
+    }
+    
+    func updateNSView(
+        _ nsView: NSView,
+        context: Context
+    ) {
+        if let containerView = nsView as? BiriNSPlayer {
+            containerView.updatePlayerLayer()
+        }
     }
 }

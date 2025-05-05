@@ -2,10 +2,9 @@
 //  CALayer+Animation.swift
 //  customPipDemo
 //
-//  Created by Iris on 2025-02-16.
-//
 
 import QuartzCore
+
 
 extension CALayer {
     func animateTransform(from: CATransform3D, to: CATransform3D, duration: CFTimeInterval) {
@@ -20,6 +19,8 @@ extension CALayer {
         self.transform = to
     }
 }
+
+
 extension CALayer {
     /// 修改 anchorPoint，但保证视图在父层中的可见位置保持不变
     func setAnchorPointWithoutMoving(_ newAnchorPoint: CGPoint) {

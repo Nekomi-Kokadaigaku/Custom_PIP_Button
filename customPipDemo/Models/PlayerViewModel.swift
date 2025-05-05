@@ -2,9 +2,6 @@
 //  PlayerViewModel.swift
 //  customPipDemo
 //
-//  Created by Iris on 2025-02-16.
-//  修改日期: 2025-03-01
-//
 
 import AVKit
 import Combine
@@ -38,7 +35,10 @@ enum PiPState: Equatable {
 }
 
 // MARK: - 视频播放 ViewModel
-class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerDelegate {
+class PlayerViewModel: NSObject, ObservableObject  {
+
+    @Published var outterRect: CGRect?
+
     @Published private(set) var playerState: PlayerState = .idle
     @Published private(set) var pipState: PiPState = .normal
 
@@ -46,27 +46,19 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     @Published private(set) var playerLayer: AVPlayerLayer!
     @Published private(set) var pipController: AVPictureInPictureController?
 
-    // 音量属性，通过 getter/setter 统一读写 UserDefaults
-    @Published var volume: Float {
-        didSet {
-            player.volume = volume
-            ud.set(volume, forKey: "playerVolume")
-        }
-    }
-//    var volume: Float {
-//        set {
-//            ud.set(newValue, forKey: "playerVolume")
-//        }
-//        get {
-//            ud.object(forKey: "playerVolume") as? Float ?? 0
-//        }
-//    }
+    @AppStorage("playerVolume") var volumePlayer: Double = 0.5
+    //    var volume: Float {
+    //        set {
+    //            defaults.set(newValue, forKey: "playerVolume")
+    //        }
+    //        get {
+    //            defaults.object(forKey: "playerVolume") as? Float ?? 0
+    //        }
+    //    }
 
     @Published var videoTitle: String = ""
 
     static var shared = PlayerViewModel()
-
-    static var `deafult` = PlayerViewModel()
 
     private var playerTimeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
@@ -87,9 +79,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     let buttonSize: CGFloat = 32
     let controlsBackgroundCornerRadius: CGFloat = 12
 
-    let ud = UserDefaults.standard
-    // 初始化播放器（默认 URL 流）
-    static let testURL = URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")!
+    let defaults = UserDefaults.standard
 
     // 检查播放器是否处于错误状态
     private var playerHasErrors: Bool {
@@ -99,8 +89,8 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
 
         // 检查播放器项是否有错误
         if let currentItem = player.currentItem,
-        currentItem.status == .failed ||
-        currentItem.error != nil {
+           currentItem.status == .failed ||
+            currentItem.error != nil {
             return true
         }
 
@@ -113,24 +103,116 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
     }
 
     override init() {
-        self.autoHideDelay = ud.object(forKey: "AutoHideDelayKey") as? TimeInterval ?? 3.0
-        self.volume = PlayerViewModel.loadVolume() ?? 0
+        self.autoHideDelay = defaults.object(forKey: "AutoHideDelayKey") as? TimeInterval ?? 3.0
         super.init()
-        print(volume)
 
-
-        setupPlayer(PlayerViewModel.testURL)
+        setupPlayer(Const.testURL)
         setupTimeObserver()
         setupPlayerLayer()
     }
 
-    // MARK: - Setup AVPlayer
+    deinit {
+        cleanupResources()
+    }
+}
+
+
+extension PlayerViewModel {
+
+    func setPlayerVolume(v: Double) {
+        self.player.volume = Float(v)
+    }
+
     private func setupPlayer(_ url: URL) {
+        let asset = AVAsset(url: url)
+        // 异步加载视频轨道信息
+        asset.loadValuesAsynchronously(forKeys: ["tracks"]) {
+            var error: NSError? = nil
+            let status = asset.statusOfValue(forKey: "tracks", error: &error)
+            if status == .loaded {
+                DispatchQueue.main.async {
+                    let playerItem = AVPlayerItem(asset: asset)
+
+                    // 1. 获取视频轨道信息
+                    guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+                        print("未获取到视频轨道")
+                        return
+                    }
+                    // 2. 创建 AVMutableVideoComposition
+                    let videoComposition = AVMutableVideoComposition()
+                    videoComposition.renderSize = videoTrack.naturalSize
+                    // 例如设置为 30 fps
+                    videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+
+                    // 创建视频合成指令，覆盖整个视频时长
+                    let instruction = AVMutableVideoCompositionInstruction()
+                    instruction.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+
+                    // 图层指令（可以在此处添加额外的变换）
+                    let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+                    instruction.layerInstructions = [layerInstruction]
+                    videoComposition.instructions = [instruction]
+
+                    // 3. 创建 Core Animation 图层，并添加文本层
+                    let videoSize = videoTrack.naturalSize
+                    // 父容器层，尺寸与视频一致
+                    let parentLayer = CALayer()
+                    parentLayer.frame = CGRect(origin: .zero, size: videoSize)
+
+                    // 视频图层
+                    let videoLayer = CALayer()
+                    videoLayer.frame = CGRect(origin: .zero, size: videoSize)
+                    parentLayer.addSublayer(videoLayer)
+
+                    // 创建文本图层
+                    let textLayer = CATextLayer()
+                    textLayer.string = "这里是一行文字"
+                    textLayer.font = CGFont("Helvetica-Bold" as CFString)
+                    textLayer.fontSize = 36
+                    textLayer.alignmentMode = .center
+                    textLayer.foregroundColor = NSColor.white.cgColor
+                    // 设置文本层位置，例如距离底部20像素，高度50像素
+                    let textHeight: CGFloat = 50
+                    textLayer.frame = CGRect(x: 0, y: 20, width: videoSize.width, height: textHeight)
+                    // 保证在 Retina 显示下显示清晰
+                    textLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+                    parentLayer.addSublayer(textLayer)
+
+                    // 使用 AVVideoCompositionCoreAnimationTool 绑定图层
+                    videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)
+
+                    // 4. 将视频合成对象绑定到 AVPlayerItem 上
+                    playerItem.videoComposition = videoComposition
+
+                    // 5. 创建 AVPlayer 并显示
+                    self.player = AVPlayer(playerItem: playerItem)
+                    self.playerLayer = AVPlayerLayer(player: self.player)
+                    if let a = self.outterRect {
+                        print(self.playerLayer.frame)
+                        self.playerLayer?.frame = a
+                    }
+
+                    // 设置视图的 layer
+//                    self.view.wantsLayer = true
+//                    self.view.layer = CALayer()
+//                    if let playerLayer = self.playerLayer {
+//                        self.view.layer?.addSublayer(playerLayer)
+//                    }
+                }
+            } else {
+                print("加载轨道失败: \(error?.localizedDescription ?? "未知错误")")
+            }
+        }
         let playerItem = AVPlayerItem(url: url)
         playerItem.automaticallyPreservesTimeOffsetFromLive = true
         player = AVPlayer(playerItem: playerItem)
-        player.volume = volume
+        player.volume = Float(self.volumePlayer)
         player.automaticallyWaitsToMinimizeStalling = false
+    }
+    func setOutterFrame(_ a: CGRect) {
+        DispatchQueue.main.async {
+            self.outterRect = a
+        }
     }
 
     // MARK: - UserDefaults 操作
@@ -221,24 +303,7 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         }
     }
 
-    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
-        pipState = .active
-    }
 
-    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        pipState = .normal
-    }
-
-    func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        pipState = .normal
-        playerState = .error(error)
-    }
-
-    func pictureInPictureController(_ controller: AVPictureInPictureController,
-                                    restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
-        pipState = .normal
-        completionHandler(true)
-    }
 
     // MARK: - 视频源切换
     func switchVideoSource(to urlString: String) {
@@ -267,17 +332,16 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
             print("create new player")
             cleanupResources()
             player = AVPlayer(url: url)
-            player.volume = volume
             setupTimeObserver()
             setupPlayerLayer()
         } else {
             // 否则，只替换媒体项
-            print("replace current item")
+            debugPrint("replace current item")
             let playerItem = AVPlayerItem(url: url)
             player.replaceCurrentItem(with: playerItem)
         }
+
         pipState = .normal
-        NowPlayingCenter.updateNowPlayingInfo()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self,
@@ -285,14 +349,12 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
                   let timeRange = currentItem.seekableTimeRanges.last?.timeRangeValue else {
                 self?.player.play()
                 self?.playerState = .playing
-                NowPlayingCenter.updateNowPlayingInfo()
                 return
             }
             let livePosition = CMTimeAdd(timeRange.start, timeRange.duration)
             self.player.seek(to: livePosition, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
                 self.player.play()
                 self.playerState = .playing
-                NowPlayingCenter.updateNowPlayingInfo()
             }
         }
     }
@@ -321,7 +383,37 @@ class PlayerViewModel: NSObject, ObservableObject, AVPictureInPictureControllerD
         player.replaceCurrentItem(with: nil)
     }
 
-    deinit {
-        cleanupResources()
+
+}
+
+
+extension PlayerViewModel: AVPictureInPictureControllerDelegate {
+
+    func pictureInPictureControllerDidStartPictureInPicture(
+        _ controller: AVPictureInPictureController
+    ) {
+        pipState = .active
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(
+        _ controller: AVPictureInPictureController
+    ) {
+        pipState = .normal
+    }
+
+    func pictureInPictureController(
+        _ controller: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        pipState = .normal
+        playerState = .error(error)
+    }
+
+    func pictureInPictureController(
+        _ controller: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        pipState = .normal
+        completionHandler(true)
     }
 }

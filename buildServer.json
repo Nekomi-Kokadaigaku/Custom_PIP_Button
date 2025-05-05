@@ -12,8 +12,8 @@
 	"argv": [
 		"/opt/homebrew/bin/xcode-build-server"
 	],
-	"workspace": "/Users/iris/Documents/Project/Swift/customPipDemo/customPipDemo.xcodeproj/project.xcworkspace",
-	"build_root": "/Users/iris/Library/Developer/Xcode/DerivedData/customPipDemo-gcgotljdrzdejzbqillvlupdhvan",
+	"workspace": "/Users/iris/Documents/Project/Swift/Bilibili-Client/Example/PIP/customPipDemo/customPipDemo.xcodeproj/project.xcworkspace",
+	"build_root": "/Users/iris/Library/Developer/Xcode/DerivedData/customPipDemo-fgyqxycszkxncuhbytihlvpslbtg",
 	"scheme": "customPipDemo",
 	"kind": "xcode"
 }
